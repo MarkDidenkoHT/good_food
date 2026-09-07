@@ -60,7 +60,7 @@ async function onStart(msg) {
     `chat ${chatId}`;
 
   const { data: existing, error: findErr } = await supabase
-    .from('users').select('id, user_name, user_code, access').eq('chat_id', chatId).maybeSingle();
+    .from('users').select('id, user_name, access, company_id').eq('chat_id', chatId).maybeSingle();
 
   if (findErr) {
     console.error('[telegram] lookup failed:', findErr);
@@ -68,9 +68,16 @@ async function onStart(msg) {
   }
 
   if (existing) {
-    await sendMessage(chatId, existing.access && existing.user_code
-      ? `С возвращением, ${esc(existing.user_name || displayName)}! Ваш код доступа: <code>${esc(existing.user_code)}</code>`
-      : 'Вы уже зарегистрированы. Доступ пока не открыт — с вами свяжется менеджер.');
+    let text;
+    if (existing.access === false) {
+      text = 'Вы уже зарегистрированы. Доступ пока не открыт — с вами свяжется менеджер.';
+    } else if (!existing.company_id) {
+      text = `С возвращением, ${esc(existing.user_name || displayName)}! ` +
+             'Откройте приложение и введите код компании, выданный менеджером.';
+    } else {
+      text = `С возвращением, ${esc(existing.user_name || displayName)}! Можно оформлять заказы.`;
+    }
+    await sendMessage(chatId, text);
     return;
   }
 

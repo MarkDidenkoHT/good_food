@@ -5,46 +5,86 @@ import { sign, cookieOpts, ADMIN_COOKIE, USER_COOKIE, requireAdmin, requireUser 
 
 export const authRouter = Router();
 
-/* Two different credentials:
+/* One credential in the whole system: chat_id + the COMPANY code.
 
-   - admins log into the panel with their own chat_id + personal user_code;
-   - company users open the mini-app inside Telegram, which proves who they
-     are cryptographically, and join a company once with the COMPANY code.
-
-   A code never crosses between the two. */
+   Inside Telegram the mini-app proves identity cryptographically and no code
+   is needed at all. In a plain browser — and for the admin panel, which is
+   not a mini-app — the chat id is typed instead. That is weaker: a chat id is
+   not really a secret, so the company code carries the security. Rotate a
+   company code the moment it leaks. */
 
 const CODE_RE = /^[A-Za-z0-9_-]{1,32}$/;
+const CHAT_RE = /^-?\d{1,20}$/;
+
+/* Signed Telegram payload first; a typed chat id is the fallback. */
+function identify(body) {
+  const tgUser = verifyInitData(body?.initData);
+  if (tgUser) return Number(tgUser.id);
+
+  const typed = String(body?.chat_id ?? '').trim();
+  return CHAT_RE.test(typed) ? Number(typed) : null;
+}
+
+function loadUser(chatId) {
+  return supabase
+    .from('users')
+    .select('id, user_name, access, role, chat_id, company_id, companies(id, company_name, access)')
+    .eq('chat_id', chatId)
+    .maybeSingle();
+}
+
+function loadCompany(code) {
+  return supabase
+    .from('companies')
+    .select('id, company_name, access')
+    .ilike('company_code', code)
+    .maybeSingle();
+}
+
+function publicUser(user, companyName) {
+  return {
+    id: user.id,
+    user_name: user.user_name,
+    role: user.role,
+    company_id: user.company_id,
+    company_name: companyName ?? user.companies?.company_name ?? null
+  };
+}
+
+const touch = (id) =>
+  supabase.from('users').update({ last_login: new Date().toISOString() }).eq('id', id);
 
 /* ---------- admin panel ---------- */
 
+/* An admin is a user whose company code they know and whose row says 'admin'.
+   Every rejection returns the same message: never confirm which half matched. */
 authRouter.post('/admin/login', async (req, res) => {
   const code = String(req.body?.code || '').trim();
   const chatId = String(req.body?.chat_id || '').trim();
   if (!code || !chatId) return res.status(400).json({ error: 'Chat ID and code required' });
-  if (!CODE_RE.test(code) || !/^-?\d{1,20}$/.test(chatId)) {
+  if (!CODE_RE.test(code) || !CHAT_RE.test(chatId)) {
     return res.status(401).json({ error: 'Invalid credentials' });
   }
 
-  const { data, error } = await supabase
-    .from('users')
-    .select('id, user_name, user_code, access, role, chat_id')
-    .ilike('user_code', code)
-    .maybeSingle();
+  const [{ data: user, error }, { data: company, error: cErr }] =
+    await Promise.all([loadUser(Number(chatId)), loadCompany(code)]);
   if (error) return dbError(res, error, 500);
+  if (cErr) return dbError(res, cErr, 500);
 
-  // Two factors, one message: never reveal which half was wrong.
-  const ok = data && data.role === 'admin' && String(data.chat_id ?? '') === chatId;
+  const ok = user && company &&
+    user.role === 'admin' &&
+    user.company_id === company.id &&
+    user.access !== false &&
+    company.access !== false;
   if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
-  if (data.access === false) return res.status(403).json({ error: 'Access disabled' });
 
-  await supabase.from('users').update({ last_login: new Date().toISOString() }).eq('id', data.id);
-
+  await touch(user.id);
   res.cookie(
     ADMIN_COOKIE,
-    sign({ role: 'admin', id: data.id, name: data.user_name }, '12h'),
+    sign({ role: 'admin', id: user.id, name: user.user_name }, '12h'),
     cookieOpts(12 * 3600 * 1000)
   );
-  res.json({ ok: true, id: data.id, user_name: data.user_name });
+  res.json({ ok: true, id: user.id, user_name: user.user_name });
 });
 
 authRouter.post('/admin/logout', (req, res) => {
@@ -57,28 +97,6 @@ authRouter.get('/admin/me', requireAdmin, (req, res) => {
 });
 
 /* ---------- mini-app ---------- */
-
-/* Resolve the caller from a signed Telegram launch payload. Outside
-   production an unsigned chat_id is accepted so the app can be driven from a
-   desktop browser; that shortcut must never reach a live deploy. */
-function identify(body) {
-  const tgUser = verifyInitData(body?.initData);
-  if (tgUser) return { chatId: tgUser.id, tgUser };
-
-  if (process.env.NODE_ENV !== 'production' && body?.dev_chat_id) {
-    console.warn('[auth] dev chat_id accepted — never enable this in production');
-    return { chatId: Number(body.dev_chat_id), tgUser: null };
-  }
-  return null;
-}
-
-async function loadUser(chatId) {
-  return supabase
-    .from('users')
-    .select('id, user_name, access, role, chat_id, company_id, companies(id, company_name, access)')
-    .eq('chat_id', chatId)
-    .maybeSingle();
-}
 
 function issueSession(res, user) {
   res.cookie(
@@ -94,59 +112,57 @@ function issueSession(res, user) {
   );
 }
 
-function publicUser(user) {
-  return {
-    id: user.id,
-    user_name: user.user_name,
-    role: user.role,
-    company_id: user.company_id,
-    company_name: user.companies?.company_name || null
-  };
-}
-
-/* Telegram-native sign-in. Reports precisely why access is not granted so the
-   mini-app can show the right screen: waiting for approval vs join a company. */
+/* Silent sign-in for a user already attached to a company. Reports precisely
+   why it failed so the app can show the right screen. */
 authRouter.post('/user/telegram', async (req, res) => {
-  const who = identify(req.body);
-  if (!who) return res.status(401).json({ error: 'Не удалось подтвердить Telegram' });
+  const chatId = identify(req.body);
+  if (chatId === null) return res.status(401).json({ error: 'need_code' });
 
-  const { data: user, error } = await loadUser(who.chatId);
+  const { data: user, error } = await loadUser(chatId);
   if (error) return dbError(res, error, 500);
   if (!user) return res.status(404).json({ error: 'not_registered' });
   if (user.access === false) return res.status(403).json({ error: 'pending' });
   if (!user.company_id) return res.status(409).json({ error: 'no_company' });
   if (user.companies?.access === false) return res.status(403).json({ error: 'company_blocked' });
 
-  await supabase.from('users').update({ last_login: new Date().toISOString() }).eq('id', user.id);
+  await touch(user.id);
   issueSession(res, user);
   res.json(publicUser(user));
 });
 
-/* Join a company with its code. The user must already be approved by an
-   admin, so a leaked company code alone gets nobody in. */
+/* Sign in with the company code, joining the company on first use. The user
+   must already exist (via /start) and be approved, so a leaked company code
+   on its own gets nobody in. */
 authRouter.post('/user/join', async (req, res) => {
-  const who = identify(req.body);
-  if (!who) return res.status(401).json({ error: 'Не удалось подтвердить Telegram' });
+  const chatId = identify(req.body);
+  if (chatId === null) return res.status(401).json({ error: 'Введите корректный Chat ID' });
 
   const code = String(req.body?.code || '').trim();
   if (!code) return res.status(400).json({ error: 'Введите код компании' });
   if (!CODE_RE.test(code)) return res.status(401).json({ error: 'Неверный код' });
 
-  const { data: user, error } = await loadUser(who.chatId);
+  const { data: user, error } = await loadUser(chatId);
   if (error) return dbError(res, error, 500);
   if (!user) return res.status(404).json({ error: 'not_registered' });
   if (user.access === false) return res.status(403).json({ error: 'pending' });
 
-  const { data: company, error: cErr } = await supabase
-    .from('companies').select('id, company_name, access').ilike('company_code', code).maybeSingle();
+  const { data: company, error: cErr } = await loadCompany(code);
   if (cErr) return dbError(res, cErr, 500);
   if (!company) return res.status(401).json({ error: 'Неверный код' });
   if (company.access === false) return res.status(403).json({ error: 'company_blocked' });
 
-  // First person into a company becomes its owner; everyone after is staff.
-  const { count } = await supabase
-    .from('users').select('id', { count: 'exact', head: true }).eq('company_id', company.id);
-  const role = count ? 'employee' : 'owner';
+  // Already elsewhere: the code has to be their own company's.
+  if (user.company_id && user.company_id !== company.id) {
+    return res.status(403).json({ error: 'Этот код принадлежит другой компании' });
+  }
+
+  let role = user.role;
+  if (!user.company_id) {
+    // first person into a company owns it; everyone after is staff
+    const { count } = await supabase
+      .from('users').select('id', { count: 'exact', head: true }).eq('company_id', company.id);
+    role = count ? 'employee' : 'owner';
+  }
 
   const { data: updated, error: uErr } = await supabase
     .from('users')
@@ -157,7 +173,7 @@ authRouter.post('/user/join', async (req, res) => {
   if (uErr) return dbError(res, uErr);
 
   issueSession(res, updated);
-  res.json({ ...publicUser(updated), company_name: company.company_name });
+  res.json(publicUser(updated, company.company_name));
 });
 
 authRouter.post('/user/logout', (req, res) => {

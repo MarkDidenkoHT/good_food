@@ -13,7 +13,7 @@ adminRouter.get('/users', async (req, res) => {
   let query = supabase.from('users')
     .select('*, companies(company_name)')
     .order('id', { ascending: false });
-  if (q) query = query.or(`user_name.ilike.%${q}%,user_code.ilike.%${q}%`);
+  if (q) query = query.ilike('user_name', `%${q}%`);
   const { data, error } = await query;
   if (error) return dbError(res, error, 500);
   res.json(data);
@@ -22,10 +22,13 @@ adminRouter.get('/users', async (req, res) => {
 adminRouter.post('/users', async (req, res) => {
   const body = pickUser(req.body);
   if (!body.user_name) return res.status(400).json({ error: 'Name required' });
+  // an admin logs in with chat_id + their company's code, so both are required
   if (body.role === 'admin' && !body.chat_id) {
     return res.status(400).json({ error: 'Администратору нужен chat_id для входа' });
   }
-  if (!body.user_code) body.user_code = randomCode(body.role === 'admin' ? 10 : 6);
+  if (body.role === 'admin' && !body.company_id) {
+    return res.status(400).json({ error: 'Администратору нужна компания — её код он вводит при входе' });
+  }
   const { data, error } = await supabase.from('users').insert(body).select().single();
   if (error) return dbError(res, error);
   res.status(201).json(data);
@@ -35,6 +38,9 @@ adminRouter.patch('/users/:id', async (req, res) => {
   const patch = pickUser(req.body);
   if (patch.role === 'admin' && 'chat_id' in patch && patch.chat_id === null) {
     return res.status(400).json({ error: 'Администратору нужен chat_id для входа' });
+  }
+  if (patch.role === 'admin' && 'company_id' in patch && patch.company_id === null) {
+    return res.status(400).json({ error: 'Администратору нужна компания — её код он вводит при входе' });
   }
   const demoted = (patch.role && patch.role !== 'admin') || patch.access === false;
   if (demoted && await isLastAdmin(req.params.id)) {
@@ -63,8 +69,7 @@ adminRouter.delete('/users/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-adminRouter.get('/users/new-code', (req, res) =>
-  res.json({ code: randomCode(req.query.role === 'admin' ? 10 : 6) }));
+adminRouter.get('/new-code', (req, res) => res.json({ code: randomCode(6) }));
 
 /* ---------- categories ---------- */
 
@@ -413,7 +418,6 @@ async function isLastAdmin(id) {
 function pickUser(b = {}) {
   const out = {};
   if ('user_name' in b) out.user_name = b.user_name?.trim() || null;
-  if ('user_code' in b) out.user_code = b.user_code?.trim() || null;
   if ('access' in b) out.access = !!b.access;
   if ('role' in b) {
     out.role = ['admin', 'owner', 'employee'].includes(b.role) ? b.role : 'employee';

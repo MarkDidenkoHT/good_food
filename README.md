@@ -33,13 +33,15 @@ rejected here, admin codes are rejected by the mini-app.
 
 Two separate credentials:
 
-- **Admins** — `role = 'admin'`, personal `user_code` + their `chat_id`, log
-  into `/admin`. The first one comes from the bootstrap block in
-  `db/schema.sql`; the API refuses to delete or demote the last enabled admin,
-  or to save an admin without a `chat_id`.
-- **Company staff** — `role` is `owner` or `employee`, and they never type a
-  personal code. They open the mini-app inside Telegram, which proves who they
-  are, and join a company once with the **company** code.
+There is exactly one code in the system: **the company code**. Nobody has a
+personal code.
+
+- **Admins** — `role = 'admin'`, sign in at `/admin` with their `chat_id` +
+  their own company's code. The API refuses to save an admin without both, and
+  refuses to delete or demote the last enabled admin.
+- **Company staff** — `owner` or `employee`. Inside Telegram the mini-app
+  identifies them from the signed launch payload and no code is typed at all;
+  in a plain browser they enter `chat_id` + the company code.
 
 A company code alone gets nobody in: the user must already exist (via `/start`)
 and have been approved by an admin. The first person to join a company becomes

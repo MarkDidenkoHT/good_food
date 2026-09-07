@@ -54,24 +54,51 @@ function toast(text, kindName = 'ok') {
 
 /* ── boot ───────────────────────────────────────────────────── */
 
+/* Inside Telegram the signed initData identifies the user with no typing. In
+   a plain browser there is nothing to verify, so the login form asks for the
+   chat id and the company code instead. */
+let chatId = null;
+
 async function start() {
-  // initData is the only trustworthy identity; dev_chat_id is accepted by the
-  // server outside production so the app can be opened in a desktop browser.
-  const payload = { initData: tg?.initData || '' };
-  const devId = new URLSearchParams(location.search).get('dev_chat_id');
-  if (devId) payload.dev_chat_id = devId;
+  const initData = tg?.initData || '';
 
-  const { ok, status, data } = await post('/api/auth/user/telegram', payload);
+  // An existing session outruns both paths.
+  const session = await fetch('/api/auth/user/me', { credentials: 'same-origin' });
+  if (session.ok) { me = await session.json(); return openApp(); }
 
+  if (!initData) return renderLogin();
+
+  const { ok, status, data } = await post('/api/auth/user/telegram', { initData });
   if (ok) { me = data; return openApp(); }
+
   if (status === 404) return centered('Вы ещё не зарегистрированы',
     'Откройте бота и нажмите /start, затем вернитесь сюда.');
-  if (status === 409) return renderJoin();
   if (data.error === 'company_blocked') return centered('Доступ компании закрыт',
     'Свяжитесь с менеджером.');
   if (status === 403) return centered('Ожидайте подтверждения',
     'Менеджер откроет доступ — вы получите сообщение в Telegram.');
-  return centered('Не удалось войти', data.error || 'Попробуйте позже.');
+  if (status === 409) return renderJoin();      // known user, no company yet
+  return renderLogin();
+}
+
+/* Browser login: chat id + company code. */
+function renderLogin() {
+  centered('Вход', 'Введите ваш Chat ID и код компании.', `
+    <form id="login" style="text-align:left">
+      <input id="chat" inputmode="numeric" maxlength="20" autocomplete="off"
+             spellcheck="false" placeholder="Chat ID" required>
+      <input class="code-input" id="code" maxlength="32" autocomplete="one-time-code"
+             autocapitalize="off" spellcheck="false" placeholder="КОД" required
+             style="margin-top:10px">
+      <button class="btn" type="submit" style="margin-top:12px">Войти</button>
+      <div class="err" id="err"></div>
+    </form>`);
+
+  document.getElementById('login').onsubmit = (e) => {
+    e.preventDefault();
+    chatId = document.getElementById('chat').value.trim();
+    submitJoin(document.getElementById('code').value.trim());
+  };
 }
 
 function centered(title, text, extraHTML = '') {
@@ -84,28 +111,41 @@ function centered(title, text, extraHTML = '') {
     </div></div>`;
 }
 
+/* Known user inside Telegram who has not joined a company yet. */
 function renderJoin() {
   centered('Код компании', 'Введите код, выданный менеджером.', `
     <form id="join">
       <input class="code-input" id="code" maxlength="32" autocomplete="one-time-code"
-             autocapitalize="off" spellcheck="false" placeholder="XXXXXX" required>
+             autocapitalize="off" spellcheck="false" placeholder="КОД" required>
       <button class="btn" type="submit" style="margin-top:12px">Продолжить</button>
       <div class="err" id="err"></div>
     </form>`);
 
-  document.getElementById('join').onsubmit = async (e) => {
+  document.getElementById('join').onsubmit = (e) => {
     e.preventDefault();
-    const err = document.getElementById('err');
-    err.textContent = '';
-    const payload = { initData: tg?.initData || '', code: document.getElementById('code').value.trim() };
-    const devId = new URLSearchParams(location.search).get('dev_chat_id');
-    if (devId) payload.dev_chat_id = devId;
-
-    const { ok, data } = await post('/api/auth/user/join', payload);
-    if (!ok) { err.textContent = data.error === 'company_blocked' ? 'Доступ компании закрыт' : (data.error || 'Неверный код'); return; }
-    me = data;
-    openApp();
+    submitJoin(document.getElementById('code').value.trim());
   };
+}
+
+async function submitJoin(code) {
+  const err = document.getElementById('err');
+  if (err) err.textContent = '';
+
+  const payload = { code };
+  if (tg?.initData) payload.initData = tg.initData;
+  if (chatId) payload.chat_id = chatId;
+
+  const { ok, status, data } = await post('/api/auth/user/join', payload);
+  if (ok) { me = data; return openApp(); }
+
+  const message =
+    status === 404 ? 'Сначала нажмите /start в боте'
+    : data.error === 'pending' ? 'Доступ ещё не открыт менеджером'
+    : data.error === 'company_blocked' ? 'Доступ компании закрыт'
+    : data.error || 'Неверный код';
+
+  if (err) err.textContent = message;
+  else toast(message, 'err');
 }
 
 async function openApp() {

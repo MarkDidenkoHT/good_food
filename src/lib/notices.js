@@ -14,8 +14,8 @@ const panelUrl = (userId) => {
 function statusLine(user, { deleted = false } = {}) {
   if (deleted) return '🗑 <b>Удалён</b>';
   if (user.access === false) return '⛔️ <b>Доступ закрыт</b>';
-  if (!user.user_code) return '⚠️ <b>Доступ открыт, код не назначен</b>';
-  return `✅ <b>Доступ открыт</b> · код: <code>${esc(user.user_code)}</code>`;
+  if (!user.company_id) return '⚠️ <b>Доступ открыт, компания не назначена</b>';
+  return `✅ <b>Доступ открыт</b> · ${esc(user.company_name || 'компания назначена')}`;
 }
 
 function noticeText(user, opts = {}) {
@@ -68,8 +68,16 @@ export async function refreshUserNotice(user, opts = {}) {
   const group = adminGroupId();
   if (!group || !user?.notice_message_id) return;
 
-  await editMessageText(group, user.notice_message_id, noticeText(user, opts), {
-    reply_markup: markup(user, opts)
+  let company_name = null;
+  if (user.company_id) {
+    const { data } = await supabase
+      .from('companies').select('company_name').eq('id', user.company_id).maybeSingle();
+    company_name = data?.company_name || null;
+  }
+
+  const full = { ...user, company_name };
+  await editMessageText(group, user.notice_message_id, noticeText(full, opts), {
+    reply_markup: markup(full, opts)
   });
 }
 

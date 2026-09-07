@@ -32,7 +32,7 @@ export const usersPanel = {
           <div class="subtabs" id="usr-tabs" role="tablist"></div>
           <div style="flex:1 1 auto"></div>
           <div style="position:relative;width:260px">
-            <input class="input" id="users-search" placeholder="Поиск по названию, коду или chat id" style="padding-left:34px">
+            <input class="input" id="users-search" placeholder="Поиск по имени или chat id" style="padding-left:34px">
             <span data-icon="search" style="position:absolute;left:10px;top:9px;width:18px;height:18px;color:var(--ink-3)"></span>
           </div>
         </div>
@@ -75,7 +75,7 @@ function draw() {
   const list = rows
     .filter((r) => showDisabled || r.access)
     .filter((r) => !q ||
-      `${r.user_name || ''} ${r.user_code || ''} ${r.chat_id ?? ''}`.toLowerCase().includes(q));
+      `${r.user_name || ''} ${r.chat_id ?? ''}`.toLowerCase().includes(q));
 
   if (!list.length) {
     wrap.innerHTML = `<div class="card__body" style="color:var(--ink-3)">Ничего не найдено.</div>`;
@@ -85,8 +85,7 @@ function draw() {
   wrap.innerHTML = `
     <table class="table">
       <thead><tr>
-        <th style="width:60px">ID</th><th>Компания</th><th style="width:150px">Код</th>
-        <th style="width:130px">Chat ID</th>
+        <th style="width:60px">ID</th><th>Компания</th><th style="width:130px">Chat ID</th>
         <th style="width:170px">Компания</th>
         <th style="width:110px">Роль</th>
         <th style="width:110px">Доступ</th><th style="width:150px">Последний вход</th>
@@ -146,7 +145,6 @@ function rowHTML(u) {
     <tr id="user-row-${u.id}">
       <td class="num">${u.id}</td>
       <td style="font-weight:700">${esc(u.user_name || '—')}</td>
-      <td><span class="code-cell" data-copy="${esc(u.user_code || '')}" style="cursor:pointer" title="Скопировать">${esc(u.user_code || '—')}</span></td>
       <td class="num">${u.chat_id
         ? esc(String(u.chat_id))
         : '<span class="pill pill--off">нет</span>'}</td>
@@ -173,15 +171,6 @@ function openForm(user) {
       <div class="field">
         <label class="field__label" for="f-name">Название компании</label>
         <input class="input" id="f-name" name="user_name" required value="${esc(user?.user_name || '')}">
-      </div>
-      <div class="field">
-        <label class="field__label" for="f-code">Код доступа</label>
-        <div style="display:flex;gap:8px">
-          <input class="input input--code" id="f-code" name="user_code" maxlength="32"
-                 placeholder="AUTO" value="${esc(user?.user_code || '')}">
-          <button type="button" class="btn" id="f-gen">Сгенерировать</button>
-        </div>
-        <p class="hint">Оставьте пустым — код будет сгенерирован автоматически.</p>
       </div>
       <div class="field">
         <label class="field__label" for="f-chat">Chat ID</label>
@@ -219,14 +208,12 @@ function openForm(user) {
     onSubmit: async (data) => {
       const payload = {
         user_name: data.user_name,
-        user_code: (data.user_code || '').trim(),
         access: data.access === 'on',
         chat_id: (data.chat_id || '').trim() || null,
         company_id: data.company_id || null,
         role: data.role
       };
       if (isNew) {
-        if (!payload.user_code) delete payload.user_code;
         await api.post('/api/admin/users', payload);
         toast('Пользователь создан');
       } else {
@@ -237,11 +224,6 @@ function openForm(user) {
     }
   });
 
-  document.getElementById('f-gen').onclick = async () => {
-    const role = document.getElementById('f-role').value;
-    const { code } = await api.get(`/api/admin/users/new-code?role=${role}`);
-    document.getElementById('f-code').value = code;
-  };
 }
 
 
@@ -361,7 +343,7 @@ function companyForm(company) {
   });
 
   document.getElementById('c-gen').onclick = async () => {
-    const { code } = await api.get('/api/admin/users/new-code');
+    const { code } = await api.get('/api/admin/new-code');
     document.getElementById('c-code').value = code;
   };
 }
