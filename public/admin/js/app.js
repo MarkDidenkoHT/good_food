@@ -4,7 +4,9 @@ import { h, esc, toast } from './ui.js';
 import * as prefsMod from './prefs.js';
 import { prefs } from './prefs.js';
 import { usersPanel } from './panels/users.js';
-import { ordersPanel, itemsPanel, messagesPanel, settingsPanel, cronPanel } from './panels/placeholders.js';
+import { itemsPanel } from './panels/items.js';
+import { settingsPanel } from './panels/settings.js';
+import { ordersPanel, messagesPanel, cronPanel } from './panels/placeholders.js';
 
 /* Nav order. Users sits first while it is the only working panel; the final
    order is orders → items → users → settings → messages → cron. */
@@ -79,12 +81,14 @@ function buildNav() {
 }
 
 function wireChrome() {
-  $('#nav-toggle').onclick = () => prefsMod.set({ navCompact: !prefs.navCompact });
-  $('#aside-toggle').onclick = () => {
-    prefsMod.set({ asideCompact: !prefs.asideCompact });
-    $('#aside-compact-icon').hidden = !prefs.asideCompact;
+  const toggleCompact = () => {
+    prefsMod.set({ compact: !prefs.compact });
+    $('#aside-compact-icon').hidden = !prefs.compact;
+    buildAside();
   };
-  $('#aside-compact-icon').hidden = !prefs.asideCompact;
+  $('#nav-toggle').onclick = toggleCompact;
+  $('#aside-toggle').onclick = toggleCompact;
+  $('#aside-compact-icon').hidden = !prefs.compact;
 
   $('#logout-btn').onclick = async () => {
     await api.post('/api/auth/admin/logout');
@@ -156,47 +160,27 @@ const visualTab = {
         <div class="field">
           <span class="field__label">Тема</span>
           <div class="seg" id="seg-theme">
-            <button data-v="light"  aria-pressed="${prefs.theme === 'light'}">Светлая</button>
-            <button data-v="dark"   aria-pressed="${prefs.theme === 'dark'}">Тёмная</button>
-            <button data-v="system" aria-pressed="${prefs.theme === 'system'}">Система</button>
+            <button data-v="light" aria-pressed="${prefs.theme === 'light'}">Светлая</button>
+            <button data-v="dark"  aria-pressed="${prefs.theme === 'dark'}">Тёмная</button>
           </div>
         </div>
 
-        <div class="field">
-          <span class="field__label">Боковые панели</span>
-          <label class="switch" style="margin-bottom:12px">
-            <span>Компактное меню слева</span>
-            <input type="checkbox" id="pref-nav" ${prefs.navCompact ? 'checked' : ''}>
-            <span class="switch__track"></span>
-          </label>
-          <label class="switch">
-            <span>Компактная панель справа</span>
-            <input type="checkbox" id="pref-aside" ${prefs.asideCompact ? 'checked' : ''}>
-            <span class="switch__track"></span>
-          </label>
-          <p class="hint">В компактном режиме панель сжимается до одних иконок.</p>
-        </div>
-
         <div class="field" style="margin-bottom:0">
-          <span class="field__label">Сброс</span>
-          <button class="btn btn--block btn--sm" id="pref-reset">Вернуть настройки по умолчанию</button>
+          <span class="field__label">Боковые панели</span>
+          <div class="seg" id="seg-compact">
+            <button data-v="full"    aria-pressed="${!prefs.compact}">Полные</button>
+            <button data-v="compact" aria-pressed="${!!prefs.compact}">Компактные</button>
+          </div>
+          <p class="hint">В компактном режиме обе панели сжимаются до одних иконок.</p>
         </div>
       </div>`);
 
     el.querySelectorAll('#seg-theme button').forEach((b) => {
       b.onclick = () => { prefsMod.set({ theme: b.dataset.v }); buildAside(); };
     });
-    el.querySelector('#pref-nav').onchange = (e) => prefsMod.set({ navCompact: e.target.checked });
-    el.querySelector('#pref-aside').onchange = (e) => {
-      prefsMod.set({ asideCompact: e.target.checked });
-      $('#aside-compact-icon').hidden = !prefs.asideCompact;
-    };
-    el.querySelector('#pref-reset').onclick = () => {
-      prefsMod.set({ ...prefsMod.defaults });
-      $('#aside-compact-icon').hidden = true;
-      buildAside();
-      toast('Настройки сброшены');
-    };
+    el.querySelectorAll('#seg-compact button').forEach((b) => {
+      b.onclick = () => { prefsMod.set({ compact: b.dataset.v === 'compact' }); buildAside(); };
+    });
     return el;
   }
 };

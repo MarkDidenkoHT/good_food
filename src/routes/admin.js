@@ -49,6 +49,180 @@ adminRouter.delete('/users/:id', async (req, res) => {
 adminRouter.get('/users/new-code', (req, res) =>
   res.json({ code: randomCode(req.query.role === 'admin' ? 10 : 6) }));
 
+/* ---------- categories ---------- */
+
+adminRouter.get('/categories', async (req, res) => {
+  const { data, error } = await supabase
+    .from('categories').select('*').order('category_name', { ascending: true });
+  if (error) return dbError(res, error, 500);
+  res.json(data);
+});
+
+adminRouter.post('/categories', async (req, res) => {
+  const name = String(req.body?.category_name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Название обязательно' });
+  const { data, error } = await supabase
+    .from('categories').insert({ category_name: name }).select().single();
+  if (error) return dbError(res, error);
+  res.status(201).json(data);
+});
+
+adminRouter.patch('/categories/:id', async (req, res) => {
+  const name = String(req.body?.category_name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Название обязательно' });
+
+  const { data: before } = await supabase
+    .from('categories').select('category_name').eq('id', req.params.id).maybeSingle();
+
+  const { data, error } = await supabase
+    .from('categories')
+    .update({ category_name: name, updated_at: new Date().toISOString() })
+    .eq('id', req.params.id).select().single();
+  if (error) return dbError(res, error);
+
+  // items.item_category stores the NAME, so a rename has to follow through
+  if (before?.category_name && before.category_name !== name) {
+    await supabase.from('items')
+      .update({ item_category: name }).eq('item_category', before.category_name);
+  }
+  res.json(data);
+});
+
+adminRouter.delete('/categories/:id', async (req, res) => {
+  const { data: cat } = await supabase
+    .from('categories').select('category_name').eq('id', req.params.id).maybeSingle();
+
+  const { error } = await supabase.from('categories').delete().eq('id', req.params.id);
+  if (error) return dbError(res, error);
+
+  // orphan the items rather than delete them - they stay sellable, just uncategorised
+  if (cat?.category_name) {
+    await supabase.from('items')
+      .update({ item_category: null }).eq('item_category', cat.category_name);
+  }
+  res.json({ ok: true });
+});
+
+/* ---------- materials ---------- */
+
+adminRouter.get('/materials', async (req, res) => {
+  const { data, error } = await supabase
+    .from('materials').select('*').order('material_name', { ascending: true });
+  if (error) return dbError(res, error, 500);
+  res.json(data);
+});
+
+adminRouter.post('/materials', async (req, res) => {
+  const body = pickMaterial(req.body);
+  if (!body.material_name) return res.status(400).json({ error: 'Название обязательно' });
+  const { data, error } = await supabase.from('materials').insert(body).select().single();
+  if (error) return dbError(res, error);
+  res.status(201).json(data);
+});
+
+adminRouter.patch('/materials/:id', async (req, res) => {
+  const patch = { ...pickMaterial(req.body), updated_at: new Date().toISOString() };
+  const { data, error } = await supabase
+    .from('materials').update(patch).eq('id', req.params.id).select().single();
+  if (error) return dbError(res, error);
+
+  // items embed a snapshot of the material name, so keep those in step
+  if (patch.material_name) {
+    const { data: items } = await supabase.from('items').select('id, materials');
+    for (const it of items || []) {
+      const list = Array.isArray(it.materials) ? it.materials : [];
+      if (!list.some((m) => String(m.id) === String(req.params.id))) continue;
+      const next = list.map((m) =>
+        String(m.id) === String(req.params.id) ? { ...m, name: patch.material_name } : m);
+      await supabase.from('items').update({ materials: next }).eq('id', it.id);
+    }
+  }
+  res.json(data);
+});
+
+adminRouter.delete('/materials/:id', async (req, res) => {
+  const { error } = await supabase.from('materials').delete().eq('id', req.params.id);
+  if (error) return dbError(res, error);
+
+  const { data: items } = await supabase.from('items').select('id, materials');
+  for (const it of items || []) {
+    const list = Array.isArray(it.materials) ? it.materials : [];
+    const next = list.filter((m) => String(m.id) !== String(req.params.id));
+    if (next.length !== list.length) {
+      await supabase.from('items').update({ materials: next }).eq('id', it.id);
+    }
+  }
+  res.json({ ok: true });
+});
+
+/* ---------- items ---------- */
+
+adminRouter.get('/items', async (req, res) => {
+  const { data, error } = await supabase
+    .from('items').select('*').order('id', { ascending: false });
+  if (error) return dbError(res, error, 500);
+  res.json(data);
+});
+
+adminRouter.post('/items', async (req, res) => {
+  const body = pickItem(req.body);
+  if (!body.item_name) return res.status(400).json({ error: 'Название обязательно' });
+  const { data, error } = await supabase.from('items').insert(body).select().single();
+  if (error) return dbError(res, error);
+  res.status(201).json(data);
+});
+
+adminRouter.patch('/items/:id', async (req, res) => {
+  const patch = { ...pickItem(req.body), updated_at: new Date().toISOString() };
+  const { data, error } = await supabase
+    .from('items').update(patch).eq('id', req.params.id).select().single();
+  if (error) return dbError(res, error);
+  res.json(data);
+});
+
+adminRouter.delete('/items/:id', async (req, res) => {
+  const { error } = await supabase.from('items').delete().eq('id', req.params.id);
+  if (error) return dbError(res, error);
+  res.json({ ok: true });
+});
+
+/* ---------- app settings ---------- */
+
+const SETTING_DEFAULTS = {
+  catalog: { group_by_category: false }
+};
+
+adminRouter.get('/settings', async (req, res) => {
+  const { data, error } = await supabase.from('app_settings').select('key, value');
+  if (error) return dbError(res, error, 500);
+  const out = structuredClone(SETTING_DEFAULTS);
+  for (const row of data || []) out[row.key] = { ...out[row.key], ...row.value };
+  res.json(out);
+});
+
+adminRouter.put('/settings/catalog', async (req, res) => {
+  const value = { group_by_category: !!req.body?.group_by_category };
+
+  // Grouping the app by category is only coherent if every item has one.
+  if (value.group_by_category) {
+    const { data: orphans, error } = await supabase
+      .from('items').select('id, item_name').is('item_category', null);
+    if (error) return dbError(res, error, 500);
+    if (orphans?.length) {
+      return res.status(409).json({
+        error: 'Не у всех позиций указана категория',
+        orphans: orphans.map((o) => ({ id: o.id, item_name: o.item_name }))
+      });
+    }
+  }
+
+  const { error } = await supabase.from('app_settings').upsert({
+    key: 'catalog', value, updated_at: new Date().toISOString()
+  });
+  if (error) return dbError(res, error);
+  res.json({ ok: true, value });
+});
+
 /* ---------- admin UI prefs (right accessibility panel) ---------- */
 
 adminRouter.get('/prefs', async (req, res) => {
@@ -69,6 +243,35 @@ adminRouter.put('/prefs', async (req, res) => {
 });
 
 /* ---------- helpers ---------- */
+function pickMaterial(b = {}) {
+  const out = {};
+  if ('material_name' in b) out.material_name = b.material_name?.trim() || null;
+  if ('cost' in b) out.cost = toMoney(b.cost);
+  return out;
+}
+
+function pickItem(b = {}) {
+  const out = {};
+  if ('item_name' in b) out.item_name = b.item_name?.trim() || null;
+  if ('item_category' in b) out.item_category = b.item_category?.trim() || null;
+  if ('item_cost' in b) out.item_cost = toMoney(b.item_cost);
+  if ('materials' in b) {
+    // store a {id, name} snapshot so an item still reads correctly if a
+    // material is later renamed or removed
+    out.materials = (Array.isArray(b.materials) ? b.materials : [])
+      .map((m) => ({ id: Number(m?.id), name: String(m?.name ?? '').trim() }))
+      .filter((m) => Number.isFinite(m.id));
+  }
+  return out;
+}
+
+// item_cost / cost are bigint - whole units only
+function toMoney(v) {
+  if (v === '' || v === null || v === undefined) return null;
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 
 /* True when `id` is an admin with access and no other such admin exists. */
 async function isLastAdmin(id) {

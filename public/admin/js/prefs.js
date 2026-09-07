@@ -3,9 +3,8 @@ import { api } from './api.js';
 const KEY = 'gf_admin_prefs';
 
 export const defaults = {
-  theme: 'light',       // light | dark | system
-  navCompact: false,
-  asideCompact: false
+  theme: 'light',   // light | dark
+  compact: false    // both side panels collapse to icons together
 };
 
 export const prefs = { ...defaults };
@@ -39,13 +38,7 @@ export function set(patch) {
 }
 
 export function apply() {
-  const dark = prefs.theme === 'dark' ||
-    (prefs.theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
-  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-  document.body.classList.toggle('nav-compact', !!prefs.navCompact);
-  document.body.classList.toggle('aside-compact', !!prefs.asideCompact);
+  document.documentElement.dataset.theme = prefs.theme === 'dark' ? 'dark' : 'light';
+  document.body.classList.toggle('nav-compact', !!prefs.compact);
+  document.body.classList.toggle('aside-compact', !!prefs.compact);
 }
-
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-  if (prefs.theme === 'system') apply();
-});
