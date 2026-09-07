@@ -20,7 +20,7 @@ const view = document.getElementById('view');
 let me = null;
 let catalog = {
   items: [], categories: [], group_by_category: false, show_images: false,
-  orders: { edit_window_minutes: 0, allow_delete_new: false }
+  orders: { cutoff_enabled: false, allow_delete_new: false, ordering_blocked: false }
 };
 let kind = 'order';                 // order | return
 let screen = 'catalog';             // catalog | history
@@ -159,6 +159,12 @@ async function submitJoin(code) {
   else toast(message, 'err');
 }
 
+async function refreshRules() {
+  try {
+    catalog.orders = (await get('/api/app/catalog')).orders;
+  } catch { /* leave the last known rules in place */ }
+}
+
 async function openApp() {
   try {
     catalog = await get('/api/app/catalog');
@@ -225,7 +231,7 @@ function renderCatalog() {
   const items = catalog.items;
 
   if (!items.length) {
-    body.innerHTML = `${editingBanner()}<div class="empty">Каталог пуст.</div>`;
+    body.innerHTML = `${blockedBanner()}${editingBanner()}<div class="empty">Каталог пуст.</div>`;
     body.querySelector('#edit-cancel')?.addEventListener('click', cancelEdit);
     return renderCart();
   }
@@ -254,7 +260,7 @@ function renderCatalog() {
     html = `<div class="list">${items.map(itemHTML).join('')}</div>`;
   }
 
-  body.innerHTML = editingBanner() + html;
+  body.innerHTML = blockedBanner() + editingBanner() + html;
   body.querySelector('#edit-cancel')?.addEventListener('click', cancelEdit);
   body.querySelectorAll('[data-plus]').forEach((b) => {
     b.onclick = () => bump(Number(b.dataset.plus), +1);
@@ -300,6 +306,18 @@ function bump(id, delta) {
 /* The catalog looks the same whether a basket is new or is standing in for a
    sent order, so say plainly which one is being changed — and give the way
    back out. */
+/* Ordering is shut between the cutoff and the next morning when the setting
+   says so; saying when it opens again is more use than a dead button. */
+function blockedBanner() {
+  const o = catalog.orders || {};
+  if (!o.ordering_blocked) return '';
+  const when = o.resumes_at
+    ? new Date(o.resumes_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+    : '';
+  return `<div class="notice">Приём заказов закрыт${when ? ` до ${when}` : ''}.
+    Изменить уже отправленные заказы тоже нельзя.</div>`;
+}
+
 function editingBanner() {
   if (!editing) return '';
   return `
@@ -326,6 +344,29 @@ function cancelEdit() {
   carts[editing.kind].clear();
   editing = null;
   screen = 'history';
+  render();
+}
+
+/* Repeat: the old lines go into the basket for the customer to look over and
+   send as a new order — a re-order is a new document, not a copy of a closed
+   one. Quantities add up, so repeating twice orders twice as much. */
+function repeatOrder(order) {
+  if (editing) return toast('Сначала завершите изменение заказа', 'err');
+
+  const basket = carts[order.kind];
+  let missing = 0;
+  for (const line of Array.isArray(order.items) ? order.items : []) {
+    const id = Number(line.id);
+    // the catalog may have moved on since; a line that is gone cannot be repriced
+    if (!catalog.items.some((i) => i.id === id)) { missing++; continue; }
+    basket.set(id, Math.min(999, (basket.get(id) || 0) + (Number(line.qty) || 1)));
+  }
+
+  if (!basket.size) return toast('Этих позиций больше нет в каталоге', 'err');
+  if (missing) toast(`${missing} поз. больше нет в каталоге`, 'err');
+
+  kind = order.kind;
+  screen = 'catalog';
   render();
 }
 
@@ -388,7 +429,11 @@ function renderCart() {
               </div>`).join('')}
           </div>`).join('')}
       </div>
-      <button class="btn" id="cart-send">${submitLabel(groups)}</button>
+      ${!editing && catalog.orders?.for_next_day
+        ? '<div class="cart__note">Заказ будет учтён на следующий день</div>' : ''}
+      <button class="btn" id="cart-send"
+              ${catalog.orders?.ordering_blocked && !editing ? 'disabled' : ''}>
+        ${submitLabel(groups)}</button>
     </div>`;
   document.body.append(bar);
 
@@ -407,6 +452,7 @@ function renderCart() {
 
 function submitLabel(groups) {
   if (editing) return `Сохранить изменения #${editing.id}`;
+  if (catalog.orders?.ordering_blocked) return 'Приём заказов закрыт';
   if (groups.length === 2) return 'Отправить заказ и возврат';
   return groups[0].key === 'return' ? 'Оформить возврат' : 'Оформить заказ';
 }
@@ -425,11 +471,14 @@ async function submit() {
 
   const done = [];
   for (const job of jobs) {
-    const { ok, data } = await post('/api/app/orders', job);
+    const { ok, status, data } = await post('/api/app/orders', job);
     if (!ok) {
       btn.disabled = false;
       // whatever already went through stays sent; only the rest is retried
       done.forEach((k) => carts[k].clear());
+      // the cutoff passed while the basket was open — pick up the new rules
+      // so the screen stops offering what the server will now refuse
+      if (status === 409) await refreshRules();
       renderCatalog();
       paintTabCounts();
       return toast(data.error || 'Не удалось отправить', 'err');
@@ -451,12 +500,13 @@ async function submit() {
    as it stands. */
 async function saveEdit(btn) {
   const items = [...carts[editing.kind].entries()].map(([id, qty]) => ({ id, qty }));
-  const { ok, data } = await send('PATCH', `/api/app/orders/${editing.id}`, { items });
+  const { ok, status, data } = await send('PATCH', `/api/app/orders/${editing.id}`, { items });
   btn.disabled = false;
 
   if (!ok) {
-    if (data.error) toast(data.error, 'err');
-    else toast('Не удалось сохранить', 'err');
+    toast(data.error || 'Не удалось сохранить', 'err');
+    // the cutoff passed while the basket was open: show where things stand
+    if (status === 409) { editing = null; screen = 'history'; render(); }
     return;
   }
 
@@ -505,22 +555,22 @@ async function renderHistory() {
 const BADGE = { new: ['badge--new', 'Новый'], confirmed: ['badge--ok', 'Подтверждён'],
                 rejected: ['badge--no', 'Отклонён'] };
 
-// The server sent both the verdict and the deadline it used; re-checking the
-// clock here is what makes a long-open app behave like a freshly opened one.
+/* The server sent both the verdict and the deadline it used. Re-reading the
+   clock here is what makes an app that has been open since this morning stop
+   offering the buttons once the cutoff passes. */
 const stillOpen = (o) =>
-  Boolean(o.editable_until) && Date.now() < Date.parse(o.editable_until);
+  !o.editable_until || Date.now() < Date.parse(o.editable_until);
 
 const mayEdit = (o) => Boolean(o.can_edit) && stillOpen(o);
 const mayDelete = (o) => Boolean(o.can_delete) && stillOpen(o);
 
-function leftLabel(o) {
-  const ms = Date.parse(o.editable_until) - Date.now();
-  const mins = Math.ceil(ms / 60000);
-  if (mins >= 60) {
-    const h = Math.floor(mins / 60);
-    return `изменить можно ещё ${h} ч ${mins % 60} мин`;
-  }
-  return `изменить можно ещё ${mins} мин`;
+const clock = (iso) => new Date(iso).toLocaleTimeString('ru-RU',
+  { hour: '2-digit', minute: '2-digit' });
+
+function deadlineNote(o) {
+  if (!o.editable_until) return 'Можно изменить, пока заказ не подтверждён';
+  const sameDay = new Date(o.editable_until).toDateString() === new Date().toDateString();
+  return `Можно изменить до ${clock(o.editable_until)}${sameDay ? '' : ' завтра'}`;
 }
 
 function paintHistory(orders) {
@@ -542,13 +592,15 @@ function paintHistory(orders) {
         <div class="order__lines">${lines || '—'}</div>
         <div class="order__total">${o.total ?? 0} ₽</div>
         ${o.edited_at ? '<div class="order__note">Заказ был изменён</div>' : ''}
-        ${edit || del ? `
-          <div class="order__acts">
-            ${edit ? `<button class="btn btn--sm" data-edit="${o.id}">Изменить</button>` : ''}
-            ${del ? `<button class="btn btn--sm btn--ghost" data-del="${o.id}">Отменить</button>` : ''}
-            <span class="order__left">${esc(leftLabel(o))}</span>
-          </div>` : (o.status === 'new' && catalog.orders?.edit_window_minutes
-            ? '<div class="order__note">Заказ уже в работе — изменить нельзя.</div>' : '')}
+        <div class="order__acts">
+          ${edit ? `<button class="btn btn--sm" data-edit="${o.id}">Изменить</button>` : ''}
+          ${del ? `<button class="btn btn--sm btn--ghost" data-del="${o.id}">Отменить</button>` : ''}
+          <button class="btn btn--sm btn--ghost" data-repeat="${o.id}">Повторить</button>
+        </div>
+        <div class="order__note">${
+          edit ? esc(deadlineNote(o))
+          : o.status === 'new' ? 'Заказ уже в работе — изменить нельзя'
+          : ''}</div>
       </div>`;
   }).join('');
 
@@ -558,6 +610,9 @@ function paintHistory(orders) {
   });
   body.querySelectorAll('[data-del]').forEach((b) => {
     b.onclick = () => deleteOrder(byId.get(b.dataset.del));
+  });
+  body.querySelectorAll('[data-repeat]').forEach((b) => {
+    b.onclick = () => repeatOrder(byId.get(b.dataset.repeat));
   });
 }
 

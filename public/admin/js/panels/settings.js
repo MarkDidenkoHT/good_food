@@ -9,9 +9,11 @@ import { paintIcons } from '../icons.js';
 let settings = {
   catalog: { group_by_category: false, show_images: false },
   notifications: { notify_owner: true },
-  orders: { edit_window_minutes: 60, allow_delete_new: false }
+  orders: {
+    cutoff_enabled: false, cutoff_time: '22:00',
+    after_cutoff: 'next_day', resume_time: '08:00', allow_delete_new: false
+  }
 };
-let cron = [];
 let orphans = [];
 let root;
 
@@ -44,12 +46,7 @@ function frag(html) {
 
 async function load() {
   try {
-    const [s, c] = await Promise.all([
-      api.get('/api/admin/settings'),
-      api.get('/api/admin/cron-settings').catch(() => [])
-    ]);
-    settings = s;
-    cron = Array.isArray(c) ? c : [];
+    settings = await api.get('/api/admin/settings');
     orphans = [];
     draw();
   } catch (e) {
@@ -63,9 +60,10 @@ function draw() {
   const grouped = !!settings.catalog?.group_by_category;
   const notifyOwner = settings.notifications?.notify_owner !== false;
   const images = !!settings.catalog?.show_images;
-  const editMinutes = Number(settings.orders?.edit_window_minutes ?? 60);
-  const allowDelete = !!settings.orders?.allow_delete_new;
-  const lockJob = cron.find((j) => j.job_name === 'lock_orders');
+  const o = settings.orders || {};
+  const cutoffOn = !!o.cutoff_enabled;
+  const blocking = o.after_cutoff === 'block';
+  const allowDelete = !!o.allow_delete_new;
 
   body.innerHTML = '';
   const card = frag(`
@@ -113,13 +111,38 @@ function draw() {
       <div class="card__head"><div class="card__title">Изменение заказов</div></div>
       <div class="card__body">
         <div class="field">
-          <label class="field__label" for="edit-window">Время на изменение, минут</label>
-          <input id="edit-window" type="number" min="0" max="43200" step="5"
-                 value="${editMinutes}">
-          <p class="hint">Сколько минут после отправки заказчик может изменить
-             заказ или отменить его. Позже кнопки в приложении гаснут, а сервер
-             отклоняет изменение — заказ уже в работе. <b>0 — изменение запрещено.</b></p>
+          <span class="field__label">Время закрытия</span>
+          <div class="seg" id="seg-cutoff">
+            <button data-v="off" aria-pressed="${!cutoffOn}">Без ограничения</button>
+            <button data-v="on"  aria-pressed="${cutoffOn}">До времени</button>
+          </div>
+          <p class="hint">Пока заказ не подтверждён, заказчик меняет его свободно.
+             С ограничением — только до указанного времени: после него заказы
+             уходят в работу.</p>
         </div>
+
+        ${cutoffOn ? `
+        <div class="field">
+          <label class="field__label" for="cutoff-time">Заказы закрываются в</label>
+          <input id="cutoff-time" type="time" value="${esc(o.cutoff_time || '22:00')}">
+        </div>
+
+        <div class="field">
+          <span class="field__label">Заказы после этого времени</span>
+          <div class="seg" id="seg-after">
+            <button data-v="next_day" aria-pressed="${!blocking}">Принимать на следующий день</button>
+            <button data-v="block"    aria-pressed="${blocking}">Не принимать</button>
+          </div>
+          <p class="hint">«На следующий день» — заказ проходит, но считается за
+             завтра и меняется до завтрашнего закрытия.</p>
+        </div>
+
+        ${blocking ? `
+        <div class="field">
+          <label class="field__label" for="resume-time">Приём открывается снова в</label>
+          <input id="resume-time" type="time" value="${esc(o.resume_time || '08:00')}">
+          <p class="hint">Утром следующего дня.</p>
+        </div>` : ''}` : ''}
 
         <div class="field" style="margin-bottom:0">
           <span class="field__label">Отмена неподтверждённых заказов</span>
@@ -127,39 +150,27 @@ function draw() {
             <button data-v="off" aria-pressed="${!allowDelete}">Запрещена</button>
             <button data-v="on"  aria-pressed="${allowDelete}">Разрешена</button>
           </div>
-          <p class="hint">Разрешает удалить собственный заказ, пока он не
-             подтверждён и не истекло время выше.</p>
+          <p class="hint">Разрешает заказчику удалить свой заказ, пока его не
+             подтвердили.</p>
         </div>
-      </div>
-    </div>
-
-    <div class="card" style="margin-top:16px">
-      <div class="card__head"><div class="card__title">Cron: закрытие заказов</div></div>
-      <div class="card__body">
-        ${lockJob ? `
-          <div class="field" style="margin-bottom:0">
-            <label class="field__label" for="cron-lock">Расписание (5 полей)</label>
-            <input id="cron-lock" value="${esc(lockJob.schedule)}"
-                   spellcheck="false" autocomplete="off" style="font-family:ui-monospace,monospace">
-            <p class="hint">Как часто edge-функция <code>lock-orders</code> помечает
-               заказы, у которых время на изменение вышло. Запрет на изменение
-               действует и без неё — она только проставляет отметку.</p>
-          </div>` : `
-          <p class="hint" style="margin:0">Таблица <code>cron_settings</code> ещё не
-             создана — примените миграцию <code>db/migrations/order_edit_window.sql</code>.</p>`}
       </div>
     </div>`);
 
-  const win = card.querySelector('#edit-window');
-  // one save per finished edit, not per keystroke
-  if (win) win.onchange = () => saveOrders({ edit_window_minutes: Number(win.value) });
-
+  card.querySelectorAll('#seg-cutoff button').forEach((b) => {
+    b.onclick = () => saveOrders({ cutoff_enabled: b.dataset.v === 'on' });
+  });
+  card.querySelectorAll('#seg-after button').forEach((b) => {
+    b.onclick = () => saveOrders({ after_cutoff: b.dataset.v });
+  });
   card.querySelectorAll('#seg-delete button').forEach((b) => {
     b.onclick = () => saveOrders({ allow_delete_new: b.dataset.v === 'on' });
   });
 
-  const cronInput = card.querySelector('#cron-lock');
-  if (cronInput) cronInput.onchange = () => saveCron('lock_orders', cronInput.value.trim());
+  // one save per finished edit, not per keystroke
+  const cutoff = card.querySelector('#cutoff-time');
+  if (cutoff) cutoff.onchange = () => saveOrders({ cutoff_time: cutoff.value });
+  const resume = card.querySelector('#resume-time');
+  if (resume) resume.onchange = () => saveOrders({ resume_time: resume.value });
 
   card.querySelectorAll('#seg-catalog button').forEach((b) => {
     b.onclick = () => save(b.dataset.v === 'grouped');
@@ -243,18 +254,6 @@ async function saveOrders(patch) {
     toast('Настройка сохранена');
   } catch (e) {
     draw();                       // put the rejected value back to what is stored
-    toast(e.message, 'err');
-  }
-}
-
-async function saveCron(job, schedule) {
-  try {
-    const row = await api.put(`/api/admin/cron-settings/${job}`, { schedule });
-    cron = cron.map((j) => (j.job_name === job ? row : j));
-    draw();
-    toast('Расписание сохранено');
-  } catch (e) {
-    draw();
     toast(e.message, 'err');
   }
 }

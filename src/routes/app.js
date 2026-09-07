@@ -3,8 +3,8 @@ import { supabase, dbError } from '../lib/supabase.js';
 import { requireUser } from '../lib/auth.js';
 import { sendNewOrderNotice, sendOrderEditedNotice, markOrderDeleted } from '../lib/notices.js';
 import { signedUrlMap } from '../lib/storage.js';
-import { orderSettings, editWindow, editableUntil, canEdit, canDelete, priceLines }
-  from '../lib/orders.js';
+import { orderSettings, editDeadline, canEdit, canDelete, orderingWindow, serviceDateFor,
+         priceLines, TZ } from '../lib/orders.js';
 
 export const appRouter = Router();
 appRouter.use(requireUser);
@@ -13,11 +13,12 @@ appRouter.use(requireUser);
    appear here — customers see items and prices only. */
 
 appRouter.get('/catalog', async (req, res) => {
-  const [items, categories, settings] = await Promise.all([
+  const [items, categories, settings, orders] = await Promise.all([
     supabase.from('items')
       .select('id, item_name, item_category, item_cost, image_path').order('item_name'),
     supabase.from('categories').select('id, category_name, image_path').order('category_name'),
-    supabase.from('app_settings').select('key, value').eq('key', 'catalog').maybeSingle()
+    supabase.from('app_settings').select('key, value').eq('key', 'catalog').maybeSingle(),
+    orderSettings()
   ]);
 
   if (items.error) return dbError(res, items.error, 500);
@@ -43,17 +44,24 @@ appRouter.get('/catalog', async (req, res) => {
       image: showImages ? urls[c.image_path] || null : null
     })),
     group_by_category: Boolean(settings.data?.value?.group_by_category),
-    orders: await orderRules()
+    orders: orderRules(orders)
   });
 });
 
-/* What the mini-app needs to draw the edit and delete buttons before it has
-   asked to use them. The endpoints check the same rule again on the way in. */
-async function orderRules() {
-  const settings = await orderSettings();
+/* What the mini-app needs before it has asked to do anything: whether the
+   buttons should be there at all, and whether orders are being taken right
+   now. Every endpoint checks the same rules again on the way in. */
+function orderRules(settings, now = new Date()) {
+  const window = orderingWindow(settings, now);
   return {
-    edit_window_minutes: editWindow(settings),
-    allow_delete_new: Boolean(settings.allow_delete_new)
+    cutoff_enabled: Boolean(settings.cutoff_enabled),
+    cutoff_time: settings.cutoff_time,
+    allow_delete_new: Boolean(settings.allow_delete_new),
+    ordering_blocked: window.blocked,
+    resumes_at: window.resumes_at?.toISOString() || null,
+    service_date: window.service_date,
+    // the order goes on tomorrow's list even though it is accepted now
+    for_next_day: window.service_date !== serviceDateFor({ cutoff_enabled: false }, now)
   };
 }
 
@@ -61,7 +69,7 @@ appRouter.get('/orders', async (req, res) => {
   const [{ data, error }, settings] = await Promise.all([
     supabase
       .from('orders')
-      .select('id, created_at, kind, status, items, total, comment, user_id, locked, edited_at')
+      .select('id, created_at, kind, status, items, total, comment, user_id, edited_at, service_date')
       .eq('company_id', req.user.company_id)
       .order('created_at', { ascending: false })
       .limit(50),
@@ -72,13 +80,25 @@ appRouter.get('/orders', async (req, res) => {
   const now = new Date();
   res.json((data || []).map((o) => ({
     ...o,
-    editable_until: editableUntil(o, settings)?.toISOString() || null,
+    editable_until: editDeadline(o, settings)?.toISOString() || null,
     can_edit: canEdit(o, settings, now),
     can_delete: canDelete(o, settings, now)
   })));
 });
 
 appRouter.post('/orders', async (req, res) => {
+  const settings = await orderSettings();
+
+  // Under 'block' the shop stops taking orders between the cutoff and the
+  // next morning; under 'next_day' it keeps taking them for tomorrow.
+  const window = orderingWindow(settings);
+  if (window.blocked) {
+    return res.status(409).json({
+      error: 'Приём заказов закрыт до ' + hhmm(window.resumes_at),
+      resumes_at: window.resumes_at?.toISOString() || null
+    });
+  }
+
   const kind = req.body?.kind === 'return' ? 'return' : 'order';
   const comment = String(req.body?.comment || '').trim().slice(0, 500) || null;
 
@@ -105,7 +125,8 @@ appRouter.post('/orders', async (req, res) => {
       status: 'new',
       items: lines,
       total,
-      comment
+      comment,
+      service_date: window.service_date
     })
     .select().single();
   if (insErr) return dbError(res, insErr);
@@ -114,17 +135,17 @@ appRouter.post('/orders', async (req, res) => {
   res.status(201).json(order);
 });
 
-/* Edit an order the customer already sent. Allowed only while it is 'new' and
-   inside the window from Настройки — an app opened before the deadline gets
-   the same answer as one opened after it, because the check is here and not
-   in the browser. The basket is re-priced from the catalog, so an edit can
-   never carry a stale or invented price. */
+/* Edit an order the customer already sent. Free while nobody has approved it
+   and today's cutoff has not passed — an app opened before the cutoff gets the
+   same answer as one opened after it, because the check is here and not in the
+   browser. The basket is re-priced from the catalog, so an edit can never
+   carry a stale or invented price. */
 appRouter.patch('/orders/:id', async (req, res) => {
   const settings = await orderSettings();
 
   const { data: order, error: findErr } = await supabase
     .from('orders')
-    .select('id, company_id, user_id, kind, status, locked, created_at, notice_message_id')
+    .select('id, company_id, user_id, kind, status, created_at, service_date, notice_message_id')
     .eq('id', req.params.id)
     .maybeSingle();
   if (findErr) return dbError(res, findErr, 500);
@@ -135,7 +156,7 @@ appRouter.patch('/orders/:id', async (req, res) => {
     return res.status(403).json({ error: 'Это заказ другого сотрудника' });
   }
   if (!canEdit(order, settings)) {
-    return res.status(409).json({ error: 'Время на изменение заказа истекло' });
+    return res.status(409).json({ error: closedMessage(order, settings) });
   }
 
   const wanted = Array.isArray(req.body?.items) ? req.body.items : [];
@@ -172,8 +193,8 @@ appRouter.patch('/orders/:id', async (req, res) => {
   res.json(updated);
 });
 
-/* Delete an order that has not been approved yet — only when Настройки allows
-   it, and only inside the same window. */
+/* Cancel an order nobody has approved yet — only when Настройки allows it,
+   and only before the same cutoff. */
 appRouter.delete('/orders/:id', async (req, res) => {
   const settings = await orderSettings();
   if (!settings.allow_delete_new) {
@@ -182,7 +203,7 @@ appRouter.delete('/orders/:id', async (req, res) => {
 
   const { data: order, error: findErr } = await supabase
     .from('orders')
-    .select('id, company_id, user_id, kind, status, locked, created_at, items, total, comment, notice_message_id')
+    .select('id, company_id, user_id, kind, status, created_at, service_date, items, total, comment, notice_message_id')
     .eq('id', req.params.id)
     .maybeSingle();
   if (findErr) return dbError(res, findErr, 500);
@@ -193,7 +214,7 @@ appRouter.delete('/orders/:id', async (req, res) => {
     return res.status(403).json({ error: 'Это заказ другого сотрудника' });
   }
   if (!canDelete(order, settings)) {
-    return res.status(409).json({ error: 'Время на изменение заказа истекло' });
+    return res.status(409).json({ error: closedMessage(order, settings) });
   }
 
   const { error } = await supabase
@@ -203,3 +224,18 @@ appRouter.delete('/orders/:id', async (req, res) => {
   markOrderDeleted(order).catch((e) => console.error('[notices]', e));
   res.json({ ok: true });
 });
+
+/* Say which of the two closed the order, since the customer can do something
+   about neither but should not be left guessing. */
+function closedMessage(order, settings) {
+  if (order.status !== 'new') return 'Заказ уже обработан';
+  const deadline = editDeadline(order, settings);
+  return `Изменение закрыто в ${hhmm(deadline)} — заказ уже в работе`;
+}
+
+// the local clock the cutoff is written in, for messages back to the customer
+function hhmm(date) {
+  return date
+    ? date.toLocaleTimeString('ru-RU', { timeZone: TZ, hour: '2-digit', minute: '2-digit' })
+    : '';
+}

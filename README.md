@@ -23,8 +23,7 @@ Three blocks: left nav (300px) · main content · right accessibility panel (300
 - Preferences persist in `localStorage` and sync to `public.admin_prefs`.
 - Working today: **Заказы** (confirm/reject), **Позиции** (items, categories,
   materials), **Пользователи** (users + companies), **Настройки**.
-  Сообщения and Cron are still placeholders (cron schedules are edited from
-  **Настройки** for now).
+  Сообщения and Cron are still placeholders.
 
 Login: **chat_id + access code** of a `public.users` row with `role = 'admin'`
 → signed httpOnly cookie (12h). Both must match the same row. Owner codes are
@@ -68,30 +67,37 @@ Deciding an order twice is refused rather than re-notifying everyone.
 
 The mini-app exchanges the code for a 30-day cookie and stamps `last_login`.
 
-### Editing and cancelling
+### Editing, repeating and cancelling
 
-**Настройки → Изменение заказов** holds two numbers the customer side obeys:
+Any order can be **repeated**: its lines drop into the basket for the customer
+to look over and send as a new order. A repeat is a new document, not a copy —
+it is priced from today's catalog and approved on its own.
 
-- **Время на изменение** — minutes after sending during which the author may
-  edit the order or cancel it. `0` switches editing off entirely.
-- **Отмена неподтверждённых заказов** — whether cancelling is offered at all.
+An order nobody has approved yet is **freely editable**. **Настройки →
+Изменение заказов** can put one daily cutoff on that:
 
-The window is enforced in `src/lib/orders.js`, which both the history list and
-the `PATCH`/`DELETE` endpoints go through, so an app left open since before the
-deadline gets the same refusal as one opened after it. Only the author of an
-order may touch it, and only while it is still `new`.
+- **Заказы закрываются в** — `HH:MM` local (`Europe/Chisinau`). Past it the
+  day's orders have gone into production and are closed to the customer.
+- **Заказы после этого времени** — either accepted **for the next day** (they
+  stay editable until *tomorrow's* cutoff) or **not accepted** until
+  **Приём открывается снова в** the following morning.
+- **Отмена неподтверждённых заказов** — whether the author may cancel their
+  own order while it is still `new`.
 
-An edit re-prices the basket from the catalog and posts a **new** message to
-the admin group — the old post is blanked to a pointer, since somebody may
-already have started on those numbers. A cancellation marks the old post
-instead of removing it.
+`orders.service_date` records the day an order counts for, stamped at insert so
+moving the cutoff later never rewrites history.
 
-The `lock_orders` edge function (`supabase/functions/lock-orders/`) stamps
-`orders.locked` once the window has passed; its schedule lives in
-`public.cron_settings` and is edited in **Настройки → Cron**. It is
-bookkeeping only — a missed run cannot let a late edit through.
+The rules live in `src/lib/orders.js` and both sides read them from there: the
+mini-app to decide what to draw, the `POST`/`PATCH`/`DELETE` endpoints to
+decide what to accept. An app left open since before the cutoff is refused
+exactly like one opened after it, and its buttons drop away on their own when
+the deadline passes.
 
-Apply `db/migrations/order_edit_window.sql` before deploying this.
+An edit re-prices the basket and posts a **new** message to the admin group —
+the old post is blanked to a pointer, since somebody may already have started
+on those numbers. A cancellation marks the old post instead of removing it.
+
+Apply `db/migrations/order_edit_cutoff.sql` before deploying this.
 
 ## Telegram bot
 
