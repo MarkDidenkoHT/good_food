@@ -23,7 +23,8 @@ Three blocks: left nav (300px) · main content · right accessibility panel (300
 - Preferences persist in `localStorage` and sync to `public.admin_prefs`.
 - Working today: **Заказы** (confirm/reject), **Позиции** (items, categories,
   materials), **Пользователи** (users + companies), **Настройки**.
-  Сообщения and Cron are still placeholders.
+  Сообщения and Cron are still placeholders (cron schedules are edited from
+  **Настройки** for now).
 
 Login: **chat_id + access code** of a `public.users` row with `role = 'admin'`
 → signed httpOnly cookie (12h). Both must match the same row. Owner codes are
@@ -66,6 +67,31 @@ person who ordered — plus the company owner, if
 Deciding an order twice is refused rather than re-notifying everyone.
 
 The mini-app exchanges the code for a 30-day cookie and stamps `last_login`.
+
+### Editing and cancelling
+
+**Настройки → Изменение заказов** holds two numbers the customer side obeys:
+
+- **Время на изменение** — minutes after sending during which the author may
+  edit the order or cancel it. `0` switches editing off entirely.
+- **Отмена неподтверждённых заказов** — whether cancelling is offered at all.
+
+The window is enforced in `src/lib/orders.js`, which both the history list and
+the `PATCH`/`DELETE` endpoints go through, so an app left open since before the
+deadline gets the same refusal as one opened after it. Only the author of an
+order may touch it, and only while it is still `new`.
+
+An edit re-prices the basket from the catalog and posts a **new** message to
+the admin group — the old post is blanked to a pointer, since somebody may
+already have started on those numbers. A cancellation marks the old post
+instead of removing it.
+
+The `lock_orders` edge function (`supabase/functions/lock-orders/`) stamps
+`orders.locked` once the window has passed; its schedule lives in
+`public.cron_settings` and is edited in **Настройки → Cron**. It is
+bookkeeping only — a missed run cannot let a late edit through.
+
+Apply `db/migrations/order_edit_window.sql` before deploying this.
 
 ## Telegram bot
 

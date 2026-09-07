@@ -66,6 +66,8 @@ input:focus, textarea:focus {
 }
 .tab:hover { color: var(--ink-2); }
 .tab[aria-selected="true"] { color: var(--brand); border-bottom-color: var(--brand); }
+/* locked while an already-sent order of the other kind is being edited */
+.tab:disabled { opacity: .4; cursor: not-allowed; }
 .tab__count {
   min-width: 18px; padding: 1px 6px; border-radius: var(--r-pill);
   background: var(--brand); color: #fff; font-size: 11px; font-weight: 800;
@@ -183,3 +185,25 @@ input:focus, textarea:focus {
   .wrap { padding: 0 12px; }
   .list { border-radius: var(--r-md); }
 }
+
+/* ── editing a sent order ───────────────────────────────────── */
+.editbar {
+  display: flex; align-items: center; gap: 10px;
+  margin: 12px 0 0; padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: var(--brand-soft); color: var(--brand);
+  font-size: 13px; font-weight: 700;
+}
+.editbar span { flex: 1 1 auto; }
+.editbar__cancel {
+  flex: 0 0 auto; border: 0; background: none; cursor: pointer;
+  color: var(--brand); font: inherit; text-decoration: underline;
+}
+
+.order__note { margin-top: 8px; font-size: 12px; color: var(--ink-3); }
+.order__acts {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  margin-top: 10px;
+}
+.order__left { font-size: 12px; color: var(--ink-3); }
+.btn--sm { width: auto; padding: 7px 12px; font-size: 13px; }

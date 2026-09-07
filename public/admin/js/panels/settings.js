@@ -8,8 +8,10 @@ import { paintIcons } from '../icons.js';
 
 let settings = {
   catalog: { group_by_category: false, show_images: false },
-  notifications: { notify_owner: true }
+  notifications: { notify_owner: true },
+  orders: { edit_window_minutes: 60, allow_delete_new: false }
 };
+let cron = [];
 let orphans = [];
 let root;
 
@@ -33,7 +35,7 @@ export const settingsPanel = {
 
 };
 
-/* h() returns one element; this screen renders two sibling cards. */
+/* h() returns one element; this screen renders several sibling cards. */
 function frag(html) {
   const t = document.createElement('div');
   t.innerHTML = html.trim();
@@ -42,7 +44,12 @@ function frag(html) {
 
 async function load() {
   try {
-    settings = await api.get('/api/admin/settings');
+    const [s, c] = await Promise.all([
+      api.get('/api/admin/settings'),
+      api.get('/api/admin/cron-settings').catch(() => [])
+    ]);
+    settings = s;
+    cron = Array.isArray(c) ? c : [];
     orphans = [];
     draw();
   } catch (e) {
@@ -56,6 +63,9 @@ function draw() {
   const grouped = !!settings.catalog?.group_by_category;
   const notifyOwner = settings.notifications?.notify_owner !== false;
   const images = !!settings.catalog?.show_images;
+  const editMinutes = Number(settings.orders?.edit_window_minutes ?? 60);
+  const allowDelete = !!settings.orders?.allow_delete_new;
+  const lockJob = cron.find((j) => j.job_name === 'lock_orders');
 
   body.innerHTML = '';
   const card = frag(`
@@ -97,7 +107,59 @@ function draw() {
              Если заказ сделал он сам, сообщение придёт один раз.</p>
         </div>
       </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card__head"><div class="card__title">Изменение заказов</div></div>
+      <div class="card__body">
+        <div class="field">
+          <label class="field__label" for="edit-window">Время на изменение, минут</label>
+          <input id="edit-window" type="number" min="0" max="43200" step="5"
+                 value="${editMinutes}">
+          <p class="hint">Сколько минут после отправки заказчик может изменить
+             заказ или отменить его. Позже кнопки в приложении гаснут, а сервер
+             отклоняет изменение — заказ уже в работе. <b>0 — изменение запрещено.</b></p>
+        </div>
+
+        <div class="field" style="margin-bottom:0">
+          <span class="field__label">Отмена неподтверждённых заказов</span>
+          <div class="seg" id="seg-delete">
+            <button data-v="off" aria-pressed="${!allowDelete}">Запрещена</button>
+            <button data-v="on"  aria-pressed="${allowDelete}">Разрешена</button>
+          </div>
+          <p class="hint">Разрешает удалить собственный заказ, пока он не
+             подтверждён и не истекло время выше.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card__head"><div class="card__title">Cron: закрытие заказов</div></div>
+      <div class="card__body">
+        ${lockJob ? `
+          <div class="field" style="margin-bottom:0">
+            <label class="field__label" for="cron-lock">Расписание (5 полей)</label>
+            <input id="cron-lock" value="${esc(lockJob.schedule)}"
+                   spellcheck="false" autocomplete="off" style="font-family:ui-monospace,monospace">
+            <p class="hint">Как часто edge-функция <code>lock-orders</code> помечает
+               заказы, у которых время на изменение вышло. Запрет на изменение
+               действует и без неё — она только проставляет отметку.</p>
+          </div>` : `
+          <p class="hint" style="margin:0">Таблица <code>cron_settings</code> ещё не
+             создана — примените миграцию <code>db/migrations/order_edit_window.sql</code>.</p>`}
+      </div>
     </div>`);
+
+  const win = card.querySelector('#edit-window');
+  // one save per finished edit, not per keystroke
+  if (win) win.onchange = () => saveOrders({ edit_window_minutes: Number(win.value) });
+
+  card.querySelectorAll('#seg-delete button').forEach((b) => {
+    b.onclick = () => saveOrders({ allow_delete_new: b.dataset.v === 'on' });
+  });
+
+  const cronInput = card.querySelector('#cron-lock');
+  if (cronInput) cronInput.onchange = () => saveCron('lock_orders', cronInput.value.trim());
 
   card.querySelectorAll('#seg-catalog button').forEach((b) => {
     b.onclick = () => save(b.dataset.v === 'grouped');
@@ -169,6 +231,30 @@ async function saveImages(show) {
     draw();
     toast('Настройка сохранена');
   } catch (e) {
+    toast(e.message, 'err');
+  }
+}
+
+async function saveOrders(patch) {
+  try {
+    const res = await api.put('/api/admin/settings/orders', patch);
+    settings.orders = res.value;
+    draw();
+    toast('Настройка сохранена');
+  } catch (e) {
+    draw();                       // put the rejected value back to what is stored
+    toast(e.message, 'err');
+  }
+}
+
+async function saveCron(job, schedule) {
+  try {
+    const row = await api.put(`/api/admin/cron-settings/${job}`, { schedule });
+    cron = cron.map((j) => (j.job_name === job ? row : j));
+    draw();
+    toast('Расписание сохранено');
+  } catch (e) {
+    draw();
     toast(e.message, 'err');
   }
 }

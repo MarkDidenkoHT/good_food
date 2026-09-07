@@ -138,6 +138,54 @@ async function orderContext(order) {
   return { company: company.data, user: user.data };
 }
 
+/* An edited order gets its own post rather than a quiet rewrite of the old
+   one: the group is a worklist read top to bottom, and a change to an order
+   somebody may already be preparing has to arrive as a new line in it. The
+   old post is blanked to a pointer so nobody works from stale numbers, and
+   the new post becomes the one a decision later rewrites. */
+export async function sendOrderEditedNotice(order) {
+  const group = adminGroupId();
+  if (!group) return;
+
+  const ctx = await orderContext(order);
+
+  // The old post's numbers are no longer what anyone should work from; it is
+  // replaced by a pointer rather than by the new figures, which get their own
+  // message below.
+  if (order.notice_message_id) {
+    await editMessageText(group, order.notice_message_id,
+      `<b>${KIND[order.kind] || 'Заказ'} #${order.id}</b>
+
+` +
+      '✏️ <i>Заказ изменён пользователем — актуальный состав в сообщении ниже.</i>');
+  }
+
+  const text = `✏️ <b>Заказ изменён</b>
+
+${orderText(order, ctx)}`;
+  const res = await sendMessage(group, text, { reply_markup: orderMarkup(order) });
+
+  const messageId = res?.result?.message_id;
+  if (!messageId) return;
+
+  const { error } = await supabase
+    .from('orders').update({ notice_message_id: messageId }).eq('id', order.id);
+  if (error) console.error('[notices] could not store order message id:', error);
+}
+
+/* The order row is gone, so there is nothing left to open in the panel: the
+   post stays as a record of what was asked for, marked as withdrawn. */
+export async function markOrderDeleted(order) {
+  const group = adminGroupId();
+  if (!group || !order?.notice_message_id) return;
+
+  const ctx = await orderContext(order);
+  await editMessageText(group, order.notice_message_id,
+    `${orderText(order, ctx)}
+
+🗑 <b>Заказ отменён пользователем</b>`);
+}
+
 export async function sendNewOrderNotice(order) {
   const group = adminGroupId();
   if (!group) {

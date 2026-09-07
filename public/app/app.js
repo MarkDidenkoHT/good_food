@@ -18,9 +18,15 @@ tg?.onEvent?.('themeChanged', syncTheme);
 const view = document.getElementById('view');
 
 let me = null;
-let catalog = { items: [], categories: [], group_by_category: false, show_images: false };
+let catalog = {
+  items: [], categories: [], group_by_category: false, show_images: false,
+  orders: { edit_window_minutes: 0, allow_delete_new: false }
+};
 let kind = 'order';                 // order | return
 let screen = 'catalog';             // catalog | history
+/* Set while an already-sent order is being changed: the basket of that kind
+   then stands for that order rather than for a new one. */
+let editing = null;                 // { id, kind } | null
 /* An order and a return are separate documents, so they get separate
    baskets: adding to one never touches the other. */
 const carts = { order: new Map(), return: new Map() };
@@ -30,9 +36,11 @@ const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-async function post(url, body) {
+const post = (url, body) => send('POST', url, body);
+
+async function send(method, url, body) {
   const res = await fetch(url, {
-    method: 'POST',
+    method,
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body || {})
@@ -172,11 +180,13 @@ function render() {
         </div>
         <div class="tabs">
           <button class="tab" data-screen="catalog" data-kind="order"
-                  aria-selected="${screen === 'catalog' && kind === 'order'}">
+                  aria-selected="${screen === 'catalog' && kind === 'order'}"
+                  ${editing && editing.kind !== 'order' ? 'disabled' : ''}>
             Заказ<span class="tab__count" data-count="order"></span>
           </button>
           <button class="tab" data-screen="catalog" data-kind="return"
-                  aria-selected="${screen === 'catalog' && kind === 'return'}">
+                  aria-selected="${screen === 'catalog' && kind === 'return'}"
+                  ${editing && editing.kind !== 'return' ? 'disabled' : ''}>
             Возврат<span class="tab__count" data-count="return"></span>
           </button>
           <button class="tab" data-screen="history"
@@ -215,7 +225,8 @@ function renderCatalog() {
   const items = catalog.items;
 
   if (!items.length) {
-    body.innerHTML = `<div class="empty">Каталог пуст.</div>`;
+    body.innerHTML = `${editingBanner()}<div class="empty">Каталог пуст.</div>`;
+    body.querySelector('#edit-cancel')?.addEventListener('click', cancelEdit);
     return renderCart();
   }
 
@@ -243,7 +254,8 @@ function renderCatalog() {
     html = `<div class="list">${items.map(itemHTML).join('')}</div>`;
   }
 
-  body.innerHTML = html;
+  body.innerHTML = editingBanner() + html;
+  body.querySelector('#edit-cancel')?.addEventListener('click', cancelEdit);
   body.querySelectorAll('[data-plus]').forEach((b) => {
     b.onclick = () => bump(Number(b.dataset.plus), +1);
   });
@@ -283,6 +295,48 @@ function bump(id, delta) {
   paintTabCounts();
 }
 
+/* ── editing a sent order ───────────────────────────────────── */
+
+/* The catalog looks the same whether a basket is new or is standing in for a
+   sent order, so say plainly which one is being changed — and give the way
+   back out. */
+function editingBanner() {
+  if (!editing) return '';
+  return `
+    <div class="editbar">
+      <span>Изменение ${editing.kind === 'return' ? 'возврата' : 'заказа'} #${editing.id}</span>
+      <button class="editbar__cancel" id="edit-cancel" type="button">Отмена</button>
+    </div>`;
+}
+
+function startEdit(order) {
+  editing = { id: order.id, kind: order.kind };
+  kind = order.kind;
+  // the sent lines become the basket; the catalog is then edited as usual
+  carts[kind] = new Map(
+    (Array.isArray(order.items) ? order.items : [])
+      .map((l) => [Number(l.id), Math.max(1, Number(l.qty) || 1)])
+  );
+  screen = 'catalog';
+  render();
+}
+
+function cancelEdit() {
+  if (!editing) return;
+  carts[editing.kind].clear();
+  editing = null;
+  screen = 'history';
+  render();
+}
+
+async function deleteOrder(order) {
+  if (!confirm(`Отменить ${order.kind === 'return' ? 'возврат' : 'заказ'} #${order.id}?`)) return;
+  const { ok, data } = await send('DELETE', `/api/app/orders/${order.id}`);
+  if (!ok) return toast(data.error || 'Не удалось отменить', 'err');
+  toast('Заказ отменён');
+  renderHistory();
+}
+
 /* The bar is the whole cart, not a running total: both baskets are itemised
    with their own subtotals so nothing is hidden behind the tab you are not
    looking at. They stay separate documents — the sums never merge. */
@@ -298,10 +352,15 @@ const sumOf = (lines) => lines.reduce((a, l) => a + l.cost * l.qty, 0);
 function renderCart() {
   document.getElementById('cart')?.remove();
 
-  const groups = [
-    { key: 'order', label: 'Заказ', lines: cartLines('order') },
-    { key: 'return', label: 'Возврат', lines: cartLines('return') }
-  ].filter((g) => g.lines.length);
+  // while editing, the other basket is not part of this document and must not
+  // be sent along with it
+  const groups = (editing
+    ? [{ key: editing.kind, label: editing.kind === 'return' ? 'Возврат' : 'Заказ',
+         lines: cartLines(editing.kind) }]
+    : [
+        { key: 'order', label: 'Заказ', lines: cartLines('order') },
+        { key: 'return', label: 'Возврат', lines: cartLines('return') }
+      ]).filter((g) => g.lines.length);
 
   if (!groups.length) {
     document.body.style.paddingBottom = '24px';
@@ -347,6 +406,7 @@ function renderCart() {
 }
 
 function submitLabel(groups) {
+  if (editing) return `Сохранить изменения #${editing.id}`;
   if (groups.length === 2) return 'Отправить заказ и возврат';
   return groups[0].key === 'return' ? 'Оформить возврат' : 'Оформить заказ';
 }
@@ -356,6 +416,8 @@ function submitLabel(groups) {
 async function submit() {
   const btn = document.getElementById('cart-send');
   btn.disabled = true;
+
+  if (editing) return saveEdit(btn);
 
   const jobs = ['order', 'return']
     .filter((k) => carts[k].size)
@@ -384,6 +446,29 @@ async function submit() {
   render();
 }
 
+/* The window can close between opening the app and pressing save, so a 409
+   here is expected rather than exceptional: drop the edit and show the order
+   as it stands. */
+async function saveEdit(btn) {
+  const items = [...carts[editing.kind].entries()].map(([id, qty]) => ({ id, qty }));
+  const { ok, data } = await send('PATCH', `/api/app/orders/${editing.id}`, { items });
+  btn.disabled = false;
+
+  if (!ok) {
+    if (data.error) toast(data.error, 'err');
+    else toast('Не удалось сохранить', 'err');
+    return;
+  }
+
+  carts[editing.kind].clear();
+  editing = null;
+  toast('Изменения сохранены');
+  screen = 'history';
+  render();
+}
+
+let historyTimer = null;
+
 async function renderHistory() {
   const body = document.getElementById('body');
   body.innerHTML = `<div class="empty">Загрузка…</div>`;
@@ -403,13 +488,51 @@ async function renderHistory() {
     return;
   }
 
-  const badge = { new: ['badge--new', 'Новый'], confirmed: ['badge--ok', 'Подтверждён'],
-                  rejected: ['badge--no', 'Отклонён'] };
+  paintHistory(orders);
+
+  /* The deadline can pass while the screen is just sitting there — an app
+     opened before it must not keep offering the buttons. The server refuses
+     late edits anyway; this is so the offer disappears on its own. */
+  clearInterval(historyTimer);
+  historyTimer = setInterval(() => {
+    if (screen !== 'history' || !document.getElementById('body')) {
+      return clearInterval(historyTimer);
+    }
+    paintHistory(orders);
+  }, 15000);
+}
+
+const BADGE = { new: ['badge--new', 'Новый'], confirmed: ['badge--ok', 'Подтверждён'],
+                rejected: ['badge--no', 'Отклонён'] };
+
+// The server sent both the verdict and the deadline it used; re-checking the
+// clock here is what makes a long-open app behave like a freshly opened one.
+const stillOpen = (o) =>
+  Boolean(o.editable_until) && Date.now() < Date.parse(o.editable_until);
+
+const mayEdit = (o) => Boolean(o.can_edit) && stillOpen(o);
+const mayDelete = (o) => Boolean(o.can_delete) && stillOpen(o);
+
+function leftLabel(o) {
+  const ms = Date.parse(o.editable_until) - Date.now();
+  const mins = Math.ceil(ms / 60000);
+  if (mins >= 60) {
+    const h = Math.floor(mins / 60);
+    return `изменить можно ещё ${h} ч ${mins % 60} мин`;
+  }
+  return `изменить можно ещё ${mins} мин`;
+}
+
+function paintHistory(orders) {
+  const body = document.getElementById('body');
+  if (!body) return;
 
   body.innerHTML = orders.map((o) => {
-    const [cls, label] = badge[o.status] || ['', o.status];
+    const [cls, label] = BADGE[o.status] || ['', o.status];
     const lines = (Array.isArray(o.items) ? o.items : [])
       .map((l) => `${esc(l.name)} × ${l.qty}`).join('<br>');
+    const edit = mayEdit(o);
+    const del = mayDelete(o);
     return `
       <div class="order">
         <div class="order__head">
@@ -418,8 +541,24 @@ async function renderHistory() {
         </div>
         <div class="order__lines">${lines || '—'}</div>
         <div class="order__total">${o.total ?? 0} ₽</div>
+        ${o.edited_at ? '<div class="order__note">Заказ был изменён</div>' : ''}
+        ${edit || del ? `
+          <div class="order__acts">
+            ${edit ? `<button class="btn btn--sm" data-edit="${o.id}">Изменить</button>` : ''}
+            ${del ? `<button class="btn btn--sm btn--ghost" data-del="${o.id}">Отменить</button>` : ''}
+            <span class="order__left">${esc(leftLabel(o))}</span>
+          </div>` : (o.status === 'new' && catalog.orders?.edit_window_minutes
+            ? '<div class="order__note">Заказ уже в работе — изменить нельзя.</div>' : '')}
       </div>`;
   }).join('');
+
+  const byId = new Map(orders.map((o) => [String(o.id), o]));
+  body.querySelectorAll('[data-edit]').forEach((b) => {
+    b.onclick = () => startEdit(byId.get(b.dataset.edit));
+  });
+  body.querySelectorAll('[data-del]').forEach((b) => {
+    b.onclick = () => deleteOrder(byId.get(b.dataset.del));
+  });
 }
 
 start();

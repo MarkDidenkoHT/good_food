@@ -211,7 +211,11 @@ function rowHTML(o) {
         : '<span style="color:var(--ink-3)">—</span>'}
         ${o.comment ? `<div class="hint" style="margin:4px 0 0">${esc(o.comment)}</div>` : ''}</td>
       <td class="num">${o.total ?? 0} ₽</td>
-      <td><span class="pill ${cls}">${esc(label)}</span></td>
+      <td><span class="pill ${cls}">${esc(label)}</span>
+        ${o.edited_at
+          // the group post says so too; the table has to agree at a glance
+          ? `<div class="hint" style="margin:4px 0 0">изменён ${fmtDate(o.edited_at)}</div>`
+          : ''}</td>
       <td class="num">${fmtDate(o.created_at)}</td>
       <td><div class="row-actions">
         ${o.status === 'new' ? `

@@ -4,6 +4,7 @@ import { requireAdmin } from '../lib/auth.js';
 import { refreshUserNotice, announceOrderDecision } from '../lib/notices.js';
 import { sendMessage, kitchenGroupId, esc as tgEsc } from '../lib/telegram.js';
 import { uploadImage, removeImage, signedUrl, MAX_BYTES, extFor } from '../lib/storage.js';
+import { ORDER_DEFAULTS } from '../lib/orders.js';
 import express from 'express';
 
 export const adminRouter = Router();
@@ -461,8 +462,13 @@ adminRouter.delete('/images', async (req, res) => {
 
 const SETTING_DEFAULTS = {
   catalog: { group_by_category: false, show_images: false },
-  notifications: { notify_owner: true }
+  notifications: { notify_owner: true },
+  orders: ORDER_DEFAULTS
 };
+
+// a month is already far past "the order is in production"; 0 switches
+// customer editing off altogether
+const MAX_EDIT_MINUTES = 60 * 24 * 30;
 
 adminRouter.get('/settings', async (req, res) => {
   const { data, error } = await supabase.from('app_settings').select('key, value');
@@ -479,6 +485,65 @@ adminRouter.put('/settings/notifications', async (req, res) => {
   });
   if (error) return dbError(res, error);
   res.json({ ok: true, value });
+});
+
+/* How long a customer may still change an order, and whether they may cancel
+   one outright while it is unapproved. The mini-app reads the same numbers to
+   grey its buttons out; the API enforces them. */
+adminRouter.put('/settings/orders', async (req, res) => {
+  const { data: current } = await supabase
+    .from('app_settings').select('value').eq('key', 'orders').maybeSingle();
+  const value = { ...SETTING_DEFAULTS.orders, ...(current?.value || {}) };
+
+  if ('edit_window_minutes' in req.body) {
+    const n = Math.round(Number(req.body.edit_window_minutes));
+    if (!Number.isFinite(n) || n < 0 || n > MAX_EDIT_MINUTES) {
+      return res.status(400).json({ error: 'Укажите от 0 до 43200 минут' });
+    }
+    value.edit_window_minutes = n;
+  }
+  if ('allow_delete_new' in req.body) value.allow_delete_new = !!req.body.allow_delete_new;
+
+  const { error } = await supabase.from('app_settings').upsert({
+    key: 'orders', value, updated_at: new Date().toISOString()
+  });
+  if (error) return dbError(res, error);
+  res.json({ ok: true, value });
+});
+
+/* ---------- cron settings ---------- */
+
+/* Schedules for the Supabase edge functions. The row is what pg_cron is
+   registered from, so changing it here and re-running cron.schedule is the
+   whole story — nothing is redeployed. */
+adminRouter.get('/cron-settings', async (req, res) => {
+  const { data, error } = await supabase
+    .from('cron_settings').select('*').order('job_name');
+  if (error) return dbError(res, error, 500);
+  res.json(data || []);
+});
+
+// five fields, each a number, list, range, step or '*' — enough to refuse a
+// typo before it reaches pg_cron, without reimplementing cron
+const CRON_FIELD = /^(\*|\d+)(-\d+)?(\/\d+)?(,(\*|\d+)(-\d+)?(\/\d+)?)*$/;
+
+adminRouter.put('/cron-settings/:job', async (req, res) => {
+  const patch = { updated_at: new Date().toISOString() };
+
+  if ('schedule' in req.body) {
+    const schedule = String(req.body.schedule || '').trim().replace(/\s+/g, ' ');
+    const fields = schedule.split(' ');
+    if (fields.length !== 5 || !fields.every((f) => CRON_FIELD.test(f))) {
+      return res.status(400).json({ error: 'Неверное расписание cron (5 полей)' });
+    }
+    patch.schedule = schedule;
+  }
+  if ('enabled' in req.body) patch.enabled = !!req.body.enabled;
+
+  const { data, error } = await supabase
+    .from('cron_settings').update(patch).eq('job_name', req.params.job).select().single();
+  if (error) return dbError(res, error);
+  res.json(data);
 });
 
 adminRouter.put('/settings/catalog', async (req, res) => {
