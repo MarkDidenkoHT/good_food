@@ -26,9 +26,9 @@ Three blocks: left nav (300px) · main content · right accessibility panel (300
 - Working today: **Пользователи** (create/edit/delete companies, generate access
   codes, toggle access). Everything else is a placeholder.
 
-Login: access code of a `public.users` row with `role = 'admin'` → signed
-httpOnly cookie (12h). Owner codes are rejected here, admin codes are rejected
-by the mini-app.
+Login: **chat_id + access code** of a `public.users` row with `role = 'admin'`
+→ signed httpOnly cookie (12h). Both must match the same row. Owner codes are
+rejected here, admin codes are rejected by the mini-app.
 
 ## Company users
 
@@ -43,6 +43,29 @@ inserted by `db/schema.sql` (see the bootstrap block) since the panel is what
 creates users. The API refuses to delete or demote the last enabled admin.
 
 The mini-app exchanges the code for a 30-day cookie and stamps `last_login`.
+
+## Telegram bot
+
+`src/lib/telegram.js` is a fetch wrapper over the Bot API; `src/routes/telegram.js`
+is the webhook.
+
+On `/start` in a private chat the bot looks the sender up by `chat_id`. If they
+are new it inserts a row with **no code, `access = false`, `role = owner`**,
+replies that a manager will be in touch, and posts the name, username, chat_id
+and row id to `TELEGRAM_ADMIN_GROUP_ID`. An admin then opens access and assigns
+a code in the panel. Returning users get their code back once access is open.
+
+The webhook answers 200 before handling the update, so a slow database never
+triggers a Telegram retry. Missing bot env vars are logged and skipped rather
+than thrown, so a half-configured deploy still serves the panel.
+
+Register the webhook once after deploying:
+
+```bash
+curl -F "url=https://YOUR-SERVICE.onrender.com/api/telegram/webhook" \
+     -F "secret_token=YOUR_WEBHOOK_SECRET" \
+     "https://api.telegram.org/botYOUR_BOT_TOKEN/setWebhook"
+```
 
 ## Local run
 

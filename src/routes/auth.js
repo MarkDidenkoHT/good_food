@@ -18,7 +18,7 @@ const CODE_RE = /^[A-Za-z0-9_-]{1,32}$/;
 async function findByCode(code) {
   return supabase
     .from('users')
-    .select('id, user_name, user_code, access, role')
+    .select('id, user_name, user_code, access, role, chat_id')
     .ilike('user_code', code)
     .maybeSingle();
 }
@@ -31,15 +31,19 @@ function stampLogin(id) {
 
 authRouter.post('/admin/login', async (req, res) => {
   const code = String(req.body?.code || '').trim();
-  if (!code) return res.status(400).json({ error: 'Code required' });
-  if (!CODE_RE.test(code)) return res.status(401).json({ error: 'Invalid code' });
+  const chatId = String(req.body?.chat_id || '').trim();
+  if (!code || !chatId) return res.status(400).json({ error: 'Chat ID and code required' });
+  if (!CODE_RE.test(code) || !/^-?\d{1,20}$/.test(chatId)) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
 
   const { data, error } = await findByCode(code);
   if (error) return dbError(res, error, 500);
 
-  // Same 401 for "no such code" and "not an admin" — don't confirm to a
-  // holder of an owner code that their code is valid somewhere.
-  if (!data || data.role !== 'admin') return res.status(401).json({ error: 'Invalid code' });
+  // Two factors, one message: never reveal which half was wrong, or whether
+  // the code belongs to a non-admin.
+  const ok = data && data.role === 'admin' && String(data.chat_id ?? '') === chatId;
+  if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
   if (data.access === false) return res.status(403).json({ error: 'Access disabled' });
 
   await stampLogin(data.id);

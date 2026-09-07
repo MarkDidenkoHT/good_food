@@ -19,6 +19,9 @@ adminRouter.get('/users', async (req, res) => {
 adminRouter.post('/users', async (req, res) => {
   const body = pickUser(req.body);
   if (!body.user_name) return res.status(400).json({ error: 'Name required' });
+  if (body.role === 'admin' && !body.chat_id) {
+    return res.status(400).json({ error: 'Администратору нужен chat_id для входа' });
+  }
   if (!body.user_code) body.user_code = randomCode(body.role === 'admin' ? 10 : 6);
   const { data, error } = await supabase.from('users').insert(body).select().single();
   if (error) return dbError(res, error);
@@ -27,6 +30,9 @@ adminRouter.post('/users', async (req, res) => {
 
 adminRouter.patch('/users/:id', async (req, res) => {
   const patch = pickUser(req.body);
+  if (patch.role === 'admin' && 'chat_id' in patch && patch.chat_id === null) {
+    return res.status(400).json({ error: 'Администратору нужен chat_id для входа' });
+  }
   const demoted = patch.role === 'owner' || patch.access === false;
   if (demoted && await isLastAdmin(req.params.id)) {
     return res.status(409).json({ error: 'Нельзя снять права у последнего администратора' });
@@ -269,6 +275,13 @@ function pickItem(b = {}) {
   return out;
 }
 
+// Telegram chat ids are 64-bit signed; groups are negative
+function toChatId(v) {
+  const str = String(v ?? '').trim();
+  if (!str) return null;
+  return /^-?\d{1,20}$/.test(str) ? Number(str) : null;
+}
+
 // how many of a material go into one item; rows written before quantities
 // existed have no qty, and those count as 1
 function toQty(v) {
@@ -298,6 +311,7 @@ function pickUser(b = {}) {
   if ('user_code' in b) out.user_code = b.user_code?.trim() || null;
   if ('access' in b) out.access = !!b.access;
   if ('role' in b) out.role = b.role === 'admin' ? 'admin' : 'owner';
+  if ('chat_id' in b) out.chat_id = toChatId(b.chat_id);
   return out;
 }
 

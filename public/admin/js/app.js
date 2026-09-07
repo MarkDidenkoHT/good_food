@@ -41,10 +41,13 @@ function showLogin() {
     err.hidden = true;
     try {
       const fd = new FormData(form);
-      await api.post('/api/auth/admin/login', { code: fd.get('code') });
+      await api.post('/api/auth/admin/login', {
+        chat_id: fd.get('chat_id'),
+        code: fd.get('code')
+      });
       showShell();
     } catch (ex) {
-      err.textContent = ex instanceof Unauthorized ? 'Неверный код' : ex.message;
+      err.textContent = ex instanceof Unauthorized ? 'Неверный Chat ID или код' : ex.message;
       err.hidden = false;
     }
   };

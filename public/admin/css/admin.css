@@ -62,7 +62,7 @@ body.nav-compact .shell { grid-template-columns: var(--nav-w-compact) minmax(0,1
   font-size: 11px; font-weight: 800; padding: 1px 7px;
   border-radius: var(--r-pill); background: var(--surface-2); color: var(--ink-2);
 }
-.nav__foot { padding: 10px 12px; border-top: 1px solid var(--line); flex: 0 0 auto; }
+.nav__foot { padding: 10px 12px; flex: 0 0 auto; }
 .nav__foot .nav__link + .nav__link { margin-top: 2px; }
 body.nav-compact .nav__foot { padding: 10px 8px; }
 body.nav-compact .nav__foot .nav__link { justify-content: center; padding: 10px 0; }

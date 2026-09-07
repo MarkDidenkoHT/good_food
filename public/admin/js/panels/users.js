@@ -26,7 +26,7 @@ export const usersPanel = {
           <div class="card__title">Список пользователей</div>
           <div style="flex:1 1 auto"></div>
           <div style="position:relative;width:260px">
-            <input class="input" id="users-search" placeholder="Поиск по названию или коду" style="padding-left:34px">
+            <input class="input" id="users-search" placeholder="Поиск по названию, коду или chat id" style="padding-left:34px">
             <span data-icon="search" style="position:absolute;left:10px;top:9px;width:18px;height:18px;color:var(--ink-3)"></span>
           </div>
         </div>
@@ -61,7 +61,8 @@ function draw() {
   const q = query.trim().toLowerCase();
   const list = rows
     .filter((r) => showDisabled || r.access)
-    .filter((r) => !q || `${r.user_name || ''} ${r.user_code || ''}`.toLowerCase().includes(q));
+    .filter((r) => !q ||
+      `${r.user_name || ''} ${r.user_code || ''} ${r.chat_id ?? ''}`.toLowerCase().includes(q));
 
   if (!list.length) {
     wrap.innerHTML = `<div class="card__body" style="color:var(--ink-3)">Ничего не найдено.</div>`;
@@ -72,6 +73,7 @@ function draw() {
     <table class="table">
       <thead><tr>
         <th style="width:60px">ID</th><th>Компания</th><th style="width:150px">Код</th>
+        <th style="width:130px">Chat ID</th>
         <th style="width:110px">Роль</th>
         <th style="width:110px">Доступ</th><th style="width:150px">Последний вход</th>
         <th style="width:150px">Создан</th><th style="width:110px"></th>
@@ -105,6 +107,9 @@ function rowHTML(u) {
       <td class="num">${u.id}</td>
       <td style="font-weight:700">${esc(u.user_name || '—')}</td>
       <td><span class="code-cell" data-copy="${esc(u.user_code || '')}" style="cursor:pointer" title="Скопировать">${esc(u.user_code || '—')}</span></td>
+      <td class="num">${u.chat_id
+        ? esc(String(u.chat_id))
+        : '<span class="pill pill--off">нет</span>'}</td>
       <td><span class="pill">${u.role === 'admin' ? 'Админ' : 'Владелец'}</span></td>
       <td>${u.access ? '<span class="pill pill--on">Открыт</span>' : '<span class="pill pill--off">Закрыт</span>'}</td>
       <td class="num">${fmtDate(u.last_login)}</td>
@@ -136,6 +141,13 @@ function openForm(user) {
         <p class="hint">Оставьте пустым — код будет сгенерирован автоматически.</p>
       </div>
       <div class="field">
+        <label class="field__label" for="f-chat">Chat ID</label>
+        <input class="input input--code" id="f-chat" name="chat_id" inputmode="numeric"
+               maxlength="20" placeholder="312756470" value="${esc(user?.chat_id ?? '')}">
+        <p class="hint">Заполняется автоматически, когда пользователь нажимает /start в боте.
+           Администратору нужен для входа в панель.</p>
+      </div>
+      <div class="field">
         <label class="field__label" for="f-role">Роль</label>
         <select class="input" id="f-role" name="role">
           <option value="owner" ${user?.role !== 'admin' ? 'selected' : ''}>Владелец — доступ к мини-приложению</option>
@@ -154,6 +166,7 @@ function openForm(user) {
         user_name: data.user_name,
         user_code: (data.user_code || '').trim(),
         access: data.access === 'on',
+        chat_id: (data.chat_id || '').trim() || null,
         role: data.role === 'admin' ? 'admin' : 'owner'
       };
       if (isNew) {
