@@ -115,9 +115,31 @@ input:focus, textarea:focus {
   padding: 12px 0 calc(12px + env(safe-area-inset-bottom));
   box-shadow: var(--shadow-lg);
 }
-.cart__row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
-.cart__sum { flex: 1 1 auto; font-weight: 800; font-size: 16px; }
-.cart__count { color: var(--ink-3); font-size: 13px; font-weight: 600; }
+/* Tall carts scroll rather than swallow the catalog. */
+.cart__list { max-height: 38vh; overflow-y: auto; margin-bottom: 10px; }
+.cart__group + .cart__group { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+
+.cart__ghead { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.cart__gname {
+  font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .6px;
+  color: var(--ink-3); flex: 1 1 auto;
+}
+.cart__gname.is-return { color: var(--brand); }
+.cart__gsum { font-weight: 800; font-size: 15px; }
+.cart__clear {
+  width: 22px; height: 22px; flex: 0 0 auto; border: 0; border-radius: 50%;
+  background: var(--surface-2); color: var(--ink-3); font-size: 15px; line-height: 1;
+  cursor: pointer; font-family: inherit; display: grid; place-items: center;
+}
+.cart__clear:hover { background: var(--brand-soft); color: var(--brand); }
+
+.cart__line {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 13px; color: var(--ink-2); padding: 2px 0;
+}
+.cart__lname { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cart__lqty { color: var(--ink-3); font-weight: 700; flex: 0 0 auto; }
+.cart__lsum { font-weight: 700; flex: 0 0 auto; min-width: 56px; text-align: right; }
 
 /* ── history ─────────────────────────────────────────────────── */
 .order {

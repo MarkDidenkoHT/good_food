@@ -273,48 +273,103 @@ function bump(id, delta) {
   paintTabCounts();
 }
 
+/* The bar is the whole cart, not a running total: both baskets are itemised
+   with their own subtotals so nothing is hidden behind the tab you are not
+   looking at. They stay separate documents — the sums never merge. */
+function cartLines(which) {
+  return [...carts[which].entries()].map(([id, qty]) => {
+    const it = catalog.items.find((x) => x.id === id);
+    return { id, qty, cost: it?.item_cost ?? 0, name: it?.item_name || `#${id}` };
+  });
+}
+
+const sumOf = (lines) => lines.reduce((a, l) => a + l.cost * l.qty, 0);
+
 function renderCart() {
   document.getElementById('cart')?.remove();
-  if (!cart().size) return;
 
-  const lines = [...cart().entries()].map(([id, qty]) => {
-    const it = catalog.items.find((x) => x.id === id);
-    return { id, qty, cost: it?.item_cost ?? 0, name: it?.item_name || '' };
-  });
-  const total = lines.reduce((a, l) => a + l.cost * l.qty, 0);
-  const units = lines.reduce((a, l) => a + l.qty, 0);
+  const groups = [
+    { key: 'order', label: 'Заказ', lines: cartLines('order') },
+    { key: 'return', label: 'Возврат', lines: cartLines('return') }
+  ].filter((g) => g.lines.length);
+
+  if (!groups.length) {
+    document.body.style.paddingBottom = '24px';
+    return;
+  }
 
   const bar = document.createElement('div');
   bar.className = 'cart';
   bar.id = 'cart';
   bar.innerHTML = `
     <div class="wrap">
-    <div class="cart__row">
-      <div class="cart__sum">${total} ₽ <span class="cart__count">· ${units} шт.</span></div>
-      <button class="btn btn--ghost" id="cart-clear" style="width:auto;padding:8px 14px">Очистить</button>
-    </div>
-    <button class="btn" id="cart-send">
-      ${kind === 'return' ? 'Оформить возврат' : 'Оформить заказ'}
-    </button>
+      <div class="cart__list">
+        ${groups.map((g) => `
+          <div class="cart__group">
+            <div class="cart__ghead">
+              <span class="cart__gname ${g.key === 'return' ? 'is-return' : ''}">${g.label}</span>
+              <span class="cart__gsum">${sumOf(g.lines)} ₽</span>
+              <button class="cart__clear" data-clear="${g.key}" aria-label="Очистить ${g.label}">×</button>
+            </div>
+            ${g.lines.map((l) => `
+              <div class="cart__line">
+                <span class="cart__lname">${esc(l.name)}</span>
+                <span class="cart__lqty">× ${l.qty}</span>
+                <span class="cart__lsum">${l.cost * l.qty} ₽</span>
+              </div>`).join('')}
+          </div>`).join('')}
+      </div>
+      <button class="btn" id="cart-send">${submitLabel(groups)}</button>
     </div>`;
   document.body.append(bar);
 
-  document.getElementById('cart-clear').onclick = () => { cart().clear(); renderCatalog(); paintTabCounts(); };
+  bar.querySelectorAll('[data-clear]').forEach((b) => {
+    b.onclick = () => {
+      carts[b.dataset.clear].clear();
+      renderCatalog();
+      paintTabCounts();
+    };
+  });
   document.getElementById('cart-send').onclick = submit;
+
+  // the bar grows with its contents, so the page padding has to follow it
+  document.body.style.paddingBottom = `${bar.offsetHeight + 16}px`;
 }
 
+function submitLabel(groups) {
+  if (groups.length === 2) return 'Отправить заказ и возврат';
+  return groups[0].key === 'return' ? 'Оформить возврат' : 'Оформить заказ';
+}
+
+/* One request per non-empty basket: an order and a return are separate
+   documents and are confirmed separately by an admin. */
 async function submit() {
   const btn = document.getElementById('cart-send');
   btn.disabled = true;
 
-  const items = [...cart().entries()].map(([id, qty]) => ({ id, qty }));
-  const { ok, data } = await post('/api/app/orders', { kind, items });
+  const jobs = ['order', 'return']
+    .filter((k) => carts[k].size)
+    .map((k) => ({ kind: k, items: [...carts[k].entries()].map(([id, qty]) => ({ id, qty })) }));
+
+  const done = [];
+  for (const job of jobs) {
+    const { ok, data } = await post('/api/app/orders', job);
+    if (!ok) {
+      btn.disabled = false;
+      // whatever already went through stays sent; only the rest is retried
+      done.forEach((k) => carts[k].clear());
+      renderCatalog();
+      paintTabCounts();
+      return toast(data.error || 'Не удалось отправить', 'err');
+    }
+    carts[job.kind].clear();
+    done.push(job.kind);
+  }
 
   btn.disabled = false;
-  if (!ok) return toast(data.error || 'Не удалось отправить', 'err');
+  toast(done.length === 2 ? 'Заказ и возврат отправлены'
+        : done[0] === 'return' ? 'Возврат отправлен' : 'Заказ отправлен');
 
-  cart().clear();
-  toast(kind === 'return' ? `Возврат #${data.id} отправлен` : `Заказ #${data.id} отправлен`);
   screen = 'history';
   render();
 }
@@ -323,6 +378,7 @@ async function renderHistory() {
   const body = document.getElementById('body');
   body.innerHTML = `<div class="empty">Загрузка…</div>`;
   document.getElementById('cart')?.remove();
+  document.body.style.paddingBottom = '24px';
 
   let orders = [];
   try {
