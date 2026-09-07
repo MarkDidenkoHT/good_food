@@ -21,6 +21,16 @@ export function toast(message, kind = 'ok') {
 }
 
 /* ── modal ───────────────────────────────────────────────────── */
+/* Modals are opened and then wired up by the caller, so the caller needs a
+   way to be told the dialog was dismissed without saving — used to clean up
+   images uploaded into a form that was then cancelled. */
+const cancelHooks = new WeakMap();
+let currentModal = null;
+
+export function onModalCancel(fn) {
+  if (currentModal) cancelHooks.get(currentModal)?.(fn);
+}
+
 // onSubmit(formData, close) — return false to keep the modal open.
 export function modal({ title, bodyHTML, submitLabel = 'Сохранить', onSubmit }) {
   const root = document.getElementById('modal-root');
@@ -37,7 +47,18 @@ export function modal({ title, bodyHTML, submitLabel = 'Сохранить', onS
       </form>
     </div>`);
 
-  const close = () => { el.remove(); document.removeEventListener('keydown', onKey); };
+  let cancelHook = null;
+  cancelHooks.set(el, (fn) => { cancelHook = fn; });
+  currentModal = el;
+
+  let submitted = false;
+  const close = () => {
+    el.remove();
+    document.removeEventListener('keydown', onKey);
+    cancelHooks.delete(el);
+    if (currentModal === el) currentModal = null;
+    if (!submitted) cancelHook?.();
+  };
   const onKey = (e) => { if (e.key === 'Escape') close(); };
 
   el.querySelector('[data-cancel]').onclick = close;
@@ -51,7 +72,7 @@ export function modal({ title, bodyHTML, submitLabel = 'Сохранить', onS
     btn.disabled = true;
     try {
       const keep = await onSubmit?.(data, close);
-      if (keep !== false) close();
+      if (keep !== false) { submitted = true; close(); }
     } catch (err) {
       toast(err.message, 'err');
     } finally {

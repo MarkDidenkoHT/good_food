@@ -324,3 +324,21 @@ body.nav-compact .nav__list { padding: 10px 8px; }
 select.input--sm { cursor: pointer; }
 input[type="date"].input--sm { min-width: 140px; }
 .toolbar__sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 2px; }
+
+/* ── images ─────────────────────────────────────────────────────── */
+.thumb {
+  width: 40px; height: 40px; border-radius: var(--r-sm); object-fit: cover;
+  display: block; background: var(--surface-2);
+}
+.thumb--empty { border: 1px dashed var(--line-strong); }
+
+.imgpick { display: flex; gap: 14px; align-items: flex-start; }
+.imgpick__preview {
+  width: 84px; height: 84px; flex: 0 0 84px; border-radius: var(--r-md);
+  background: var(--surface-2); border: 1px solid var(--line);
+  display: grid; place-items: center; overflow: hidden;
+  color: var(--ink-3); font-size: 12px;
+}
+.imgpick__preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.imgpick__actions { flex: 1 1 auto; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.imgpick__actions .hint { width: 100%; margin: 0; }

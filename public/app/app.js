@@ -18,7 +18,7 @@ tg?.onEvent?.('themeChanged', syncTheme);
 const view = document.getElementById('view');
 
 let me = null;
-let catalog = { items: [], categories: [], group_by_category: false };
+let catalog = { items: [], categories: [], group_by_category: false, show_images: false };
 let kind = 'order';                 // order | return
 let screen = 'catalog';             // catalog | history
 /* An order and a return are separate documents, so they get separate
@@ -231,7 +231,12 @@ function renderCatalog() {
       groups.get(key).push(it);
     }
     for (const [name, list] of [...groups].sort((a, b) => a[0].localeCompare(b[0], 'ru'))) {
-      html += `<div class="group__title">${esc(name)}</div>`;
+      const cat = catalog.categories.find((c) => c.name === name);
+      html += `<div class="group__title">
+        ${catalog.show_images && cat?.image
+          ? `<img class="group__img" src="${cat.image}" alt="" loading="lazy">` : ''}
+        <span>${esc(name)}</span>
+      </div>`;
       html += `<div class="list">${list.map(itemHTML).join('')}</div>`;
     }
   } else {
@@ -252,6 +257,11 @@ function itemHTML(it) {
   const qty = cart().get(it.id) || 0;
   return `
     <div class="item ${qty ? 'item--picked' : ''}">
+      ${catalog.show_images
+        ? (it.image
+            ? `<img class="item__img" src="${it.image}" alt="" loading="lazy">`
+            : '<span class="item__img item__img--none"></span>')
+        : ''}
       <div class="item__body">
         <div class="item__name">${esc(it.item_name)}</div>
         <div class="item__cost">${it.item_cost ?? 0} ₽</div>

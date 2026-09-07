@@ -7,7 +7,7 @@ import { paintIcons } from '../icons.js';
    with the list of offenders and we render it inline. */
 
 let settings = {
-  catalog: { group_by_category: false },
+  catalog: { group_by_category: false, show_images: false },
   notifications: { notify_owner: true }
 };
 let orphans = [];
@@ -55,6 +55,7 @@ function draw() {
   if (!body) return;
   const grouped = !!settings.catalog?.group_by_category;
   const notifyOwner = settings.notifications?.notify_owner !== false;
+  const images = !!settings.catalog?.show_images;
 
   body.innerHTML = '';
   const card = frag(`
@@ -68,6 +69,16 @@ function draw() {
             <button data-v="grouped"  aria-pressed="${grouped}">По категориям</button>
           </div>
           <p class="hint">Как пользователи увидят каталог в мини-приложении.</p>
+        </div>
+
+        <div class="field" style="margin:16px 0 0">
+          <span class="field__label">Изображения</span>
+          <div class="seg" id="seg-images">
+            <button data-v="off" aria-pressed="${!images}">Без картинок</button>
+            <button data-v="on"  aria-pressed="${images}">Показывать</button>
+          </div>
+          <p class="hint">Картинки категорий и позиций в мини-приложении.
+             Загружаются на вкладке «Позиции».</p>
         </div>
         <div id="settings-error"></div>
       </div>
@@ -90,6 +101,10 @@ function draw() {
 
   card.querySelectorAll('#seg-catalog button').forEach((b) => {
     b.onclick = () => save(b.dataset.v === 'grouped');
+  });
+
+  card.querySelectorAll('#seg-images button').forEach((b) => {
+    b.onclick = () => saveImages(b.dataset.v === 'on');
   });
 
   card.querySelectorAll('#seg-notify button').forEach((b) => {
@@ -140,6 +155,17 @@ async function saveNotify(notifyOwner) {
   try {
     const res = await api.put('/api/admin/settings/notifications', { notify_owner: notifyOwner });
     settings.notifications = res.value;
+    draw();
+    toast('Настройка сохранена');
+  } catch (e) {
+    toast(e.message, 'err');
+  }
+}
+
+async function saveImages(show) {
+  try {
+    const res = await api.put('/api/admin/settings/catalog', { show_images: show });
+    settings.catalog = res.value;
     draw();
     toast('Настройка сохранена');
   } catch (e) {

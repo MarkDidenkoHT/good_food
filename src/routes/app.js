@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { supabase, dbError } from '../lib/supabase.js';
 import { requireUser } from '../lib/auth.js';
 import { sendNewOrderNotice } from '../lib/notices.js';
+import { signedUrlMap } from '../lib/storage.js';
 
 export const appRouter = Router();
 appRouter.use(requireUser);
@@ -11,17 +12,34 @@ appRouter.use(requireUser);
 
 appRouter.get('/catalog', async (req, res) => {
   const [items, categories, settings] = await Promise.all([
-    supabase.from('items').select('id, item_name, item_category, item_cost').order('item_name'),
-    supabase.from('categories').select('id, category_name').order('category_name'),
+    supabase.from('items')
+      .select('id, item_name, item_category, item_cost, image_path').order('item_name'),
+    supabase.from('categories').select('id, category_name, image_path').order('category_name'),
     supabase.from('app_settings').select('key, value').eq('key', 'catalog').maybeSingle()
   ]);
 
   if (items.error) return dbError(res, items.error, 500);
   if (categories.error) return dbError(res, categories.error, 500);
 
+  const showImages = Boolean(settings.data?.value?.show_images);
+  const rows = items.data || [];
+  const cats = categories.data || [];
+
+  // The bucket is private: hand out short-lived signed links, and only when
+  // images are switched on. image_path itself never reaches the client.
+  const urls = showImages
+    ? await signedUrlMap([...rows, ...cats].map((r) => r.image_path))
+    : {};
+
   res.json({
-    items: items.data || [],
-    categories: (categories.data || []).map((c) => c.category_name),
+    show_images: showImages,
+    items: rows.map(({ image_path, ...i }) => ({
+      ...i, image: showImages ? urls[image_path] || null : null
+    })),
+    categories: cats.map((c) => ({
+      name: c.category_name,
+      image: showImages ? urls[c.image_path] || null : null
+    })),
     group_by_category: Boolean(settings.data?.value?.group_by_category)
   });
 });

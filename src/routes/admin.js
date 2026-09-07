@@ -3,6 +3,8 @@ import { supabase, dbError } from '../lib/supabase.js';
 import { requireAdmin } from '../lib/auth.js';
 import { refreshUserNotice, announceOrderDecision } from '../lib/notices.js';
 import { sendMessage, kitchenGroupId, esc as tgEsc } from '../lib/telegram.js';
+import { uploadImage, removeImage, signedUrl, MAX_BYTES, extFor } from '../lib/storage.js';
+import express from 'express';
 
 export const adminRouter = Router();
 adminRouter.use(requireAdmin);
@@ -85,7 +87,9 @@ adminRouter.post('/categories', async (req, res) => {
   const name = String(req.body?.category_name || '').trim();
   if (!name) return res.status(400).json({ error: 'Название обязательно' });
   const { data, error } = await supabase
-    .from('categories').insert({ category_name: name }).select().single();
+    .from('categories')
+    .insert({ category_name: name, image_path: req.body?.image_path?.trim() || null })
+    .select().single();
   if (error) return dbError(res, error);
   res.status(201).json(data);
 });
@@ -95,13 +99,19 @@ adminRouter.patch('/categories/:id', async (req, res) => {
   if (!name) return res.status(400).json({ error: 'Название обязательно' });
 
   const { data: before } = await supabase
-    .from('categories').select('category_name').eq('id', req.params.id).maybeSingle();
+    .from('categories').select('category_name, image_path').eq('id', req.params.id).maybeSingle();
+
+  const patch = { category_name: name, updated_at: new Date().toISOString() };
+  if ('image_path' in req.body) patch.image_path = req.body.image_path?.trim() || null;
 
   const { data, error } = await supabase
-    .from('categories')
-    .update({ category_name: name, updated_at: new Date().toISOString() })
-    .eq('id', req.params.id).select().single();
+    .from('categories').update(patch).eq('id', req.params.id).select().single();
   if (error) return dbError(res, error);
+
+  // the replaced picture is now unreachable, so drop it from the bucket
+  if ('image_path' in patch && before?.image_path && before.image_path !== patch.image_path) {
+    removeImage(before.image_path);
+  }
 
   // items.item_category stores the NAME, so a rename has to follow through
   if (before?.category_name && before.category_name !== name) {
@@ -113,7 +123,8 @@ adminRouter.patch('/categories/:id', async (req, res) => {
 
 adminRouter.delete('/categories/:id', async (req, res) => {
   const { data: cat } = await supabase
-    .from('categories').select('category_name').eq('id', req.params.id).maybeSingle();
+    .from('categories').select('category_name, image_path').eq('id', req.params.id).maybeSingle();
+  if (cat?.image_path) removeImage(cat.image_path);
 
   const { error } = await supabase.from('categories').delete().eq('id', req.params.id);
   if (error) return dbError(res, error);
@@ -197,15 +208,28 @@ adminRouter.post('/items', async (req, res) => {
 
 adminRouter.patch('/items/:id', async (req, res) => {
   const patch = { ...pickItem(req.body), updated_at: new Date().toISOString() };
+
+  const { data: before } = await supabase
+    .from('items').select('image_path').eq('id', req.params.id).maybeSingle();
+
   const { data, error } = await supabase
     .from('items').update(patch).eq('id', req.params.id).select().single();
   if (error) return dbError(res, error);
+
+  if ('image_path' in patch && before?.image_path && before.image_path !== patch.image_path) {
+    removeImage(before.image_path);
+  }
   res.json(data);
 });
 
 adminRouter.delete('/items/:id', async (req, res) => {
+  const { data: before } = await supabase
+    .from('items').select('image_path').eq('id', req.params.id).maybeSingle();
+
   const { error } = await supabase.from('items').delete().eq('id', req.params.id);
   if (error) return dbError(res, error);
+
+  if (before?.image_path) removeImage(before.image_path);
   res.json({ ok: true });
 });
 
@@ -400,10 +424,43 @@ adminRouter.post('/orders/send-kitchen', async (req, res) => {
   res.json({ ok: true, ...summary });
 });
 
+/* ---------- images ---------- */
+
+/* Raw body rather than multipart: one file, no form fields, and no parser
+   dependency. The browser posts the File straight through. */
+adminRouter.post('/images',
+  express.raw({ type: ['image/*'], limit: MAX_BYTES }),
+  async (req, res) => {
+    const contentType = req.get('content-type');
+    if (!extFor(contentType)) {
+      return res.status(415).json({ error: 'Поддерживаются JPEG, PNG, WebP и GIF' });
+    }
+    const folder = req.query.folder === 'categories' ? 'categories' : 'items';
+    try {
+      const path = await uploadImage(req.body, contentType, folder);
+      res.status(201).json({ path });
+    } catch (e) {
+      res.status(400).json({ error: e.message || 'Не удалось загрузить' });
+    }
+  });
+
+/* Redirect to a signed link so <img src="/api/admin/images/view?path=..">
+   just works in the panel while the bucket stays private. */
+adminRouter.get('/images/view', async (req, res) => {
+  const url = await signedUrl(String(req.query.path || ''), 3600);
+  if (!url) return res.status(404).json({ error: 'Нет изображения' });
+  res.redirect(url);
+});
+
+adminRouter.delete('/images', async (req, res) => {
+  await removeImage(String(req.query.path || ''));
+  res.json({ ok: true });
+});
+
 /* ---------- app settings ---------- */
 
 const SETTING_DEFAULTS = {
-  catalog: { group_by_category: false },
+  catalog: { group_by_category: false, show_images: false },
   notifications: { notify_owner: true }
 };
 
@@ -425,7 +482,13 @@ adminRouter.put('/settings/notifications', async (req, res) => {
 });
 
 adminRouter.put('/settings/catalog', async (req, res) => {
-  const value = { group_by_category: !!req.body?.group_by_category };
+  // Read-modify-write: the panel saves one toggle at a time.
+  const { data: current } = await supabase
+    .from('app_settings').select('value').eq('key', 'catalog').maybeSingle();
+  const value = { ...SETTING_DEFAULTS.catalog, ...(current?.value || {}) };
+
+  if ('group_by_category' in req.body) value.group_by_category = !!req.body.group_by_category;
+  if ('show_images' in req.body) value.show_images = !!req.body.show_images;
 
   // Grouping the app by category is only coherent if every item has one.
   if (value.group_by_category) {
@@ -487,6 +550,7 @@ function pickItem(b = {}) {
   if ('item_name' in b) out.item_name = b.item_name?.trim() || null;
   if ('item_category' in b) out.item_category = b.item_category?.trim() || null;
   if ('item_cost' in b) out.item_cost = toMoney(b.item_cost);
+  if ('image_path' in b) out.image_path = b.image_path?.trim() || null;
   if ('materials' in b) {
     // store a {id, name} snapshot so an item still reads correctly if a
     // material is later renamed or removed

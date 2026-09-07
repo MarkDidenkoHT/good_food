@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { h, esc, toast, modal, confirmDialog } from '../ui.js';
+import { h, esc, toast, modal, confirmDialog, onModalCancel } from '../ui.js';
 import { paintIcons } from '../icons.js';
 
 /* Three sub-tabs over one nav slot: позиции, категории, материалы. They share
@@ -13,6 +13,10 @@ let query = '';
 let root;
 
 const money = (v) => (v === null || v === undefined ? '—' : `${v} ₽`);
+
+const thumb = (path) => path
+  ? `<img class="thumb" src="/api/admin/images/view?path=${encodeURIComponent(path)}" alt="" loading="lazy">`
+  : '<span class="thumb thumb--empty"></span>';
 
 export const itemsPanel = {
   id: 'items',
@@ -107,12 +111,13 @@ function drawItems(wrap, list) {
   wrap.innerHTML = `
     <table class="table">
       <thead><tr>
-        <th style="width:60px">ID</th><th>Название</th><th style="width:170px">Категория</th>
+        <th style="width:60px">ID</th><th style="width:56px"></th><th>Название</th><th style="width:170px">Категория</th>
         <th style="width:110px">Цена</th><th>Материалы</th><th style="width:110px"></th>
       </tr></thead>
       <tbody>${list.map((i) => `
         <tr>
           <td class="num">${i.id}</td>
+          <td>${thumb(i.image_path)}</td>
           <td style="font-weight:700">${esc(i.item_name || '—')}</td>
           <td>${i.item_category
             ? `<span class="pill">${esc(i.item_category)}</span>`
@@ -134,12 +139,13 @@ function drawCategories(wrap, list) {
   wrap.innerHTML = `
     <table class="table">
       <thead><tr>
-        <th style="width:60px">ID</th><th>Название</th>
+        <th style="width:60px">ID</th><th style="width:56px"></th><th>Название</th>
         <th style="width:130px">Позиций</th><th style="width:110px"></th>
       </tr></thead>
       <tbody>${list.map((c) => `
         <tr>
           <td class="num">${c.id}</td>
+          <td>${thumb(c.image_path)}</td>
           <td style="font-weight:700">${esc(c.category_name || '—')}</td>
           <td class="num">${items.filter((i) => i.item_category === c.category_name).length}</td>
           ${rowActions(c.id)}
@@ -224,19 +230,24 @@ function categoryForm(cat) {
     title: isNew ? 'Новая категория' : `Изменить: ${cat.category_name}`,
     submitLabel: isNew ? 'Создать' : 'Сохранить',
     bodyHTML: `
-      <div class="field" style="margin-bottom:0">
+      <div class="field">
         <label class="field__label" for="f-cat">Название категории</label>
         <input class="input" id="f-cat" name="category_name" required value="${esc(cat?.category_name || '')}">
         ${isNew ? '' : '<p class="hint">Позиции этой категории будут переназначены на новое название.</p>'}
-      </div>`,
+      </div>
+      ${imageFieldHTML(cat?.image_path)}`,
     onSubmit: async (d) => {
-      const payload = { category_name: d.category_name };
+      const payload = { category_name: d.category_name, image_path: d.image_path || null };
       if (isNew) await api.post('/api/admin/categories', payload);
       else await api.patch(`/api/admin/categories/${cat.id}`, payload);
       toast(isNew ? 'Категория создана' : 'Сохранено');
       await load();
     }
   });
+
+  imageFolder = 'categories';
+  const img = wireImageField(cat?.image_path);
+  onModalCancel(img.cleanup);
 }
 
 function materialForm(mat) {
@@ -296,7 +307,8 @@ function itemForm(item) {
         <input class="input" id="f-item-cost" name="item_cost" type="number" min="0" step="1"
                value="${item?.item_cost ?? ''}" placeholder="0">
       </div>
-      <div class="field" style="margin-bottom:0">
+      ${imageFieldHTML(item?.image_path)}
+      <div class="field" style="margin-bottom:0;margin-top:16px">
         <span class="field__label">Материалы</span>
         ${materials.length
           ? `<div class="picker" id="f-mats">${materials.map((m) => `
@@ -325,6 +337,7 @@ function itemForm(item) {
         item_name: d.item_name,
         item_category: d.item_category || null,
         item_cost: d.item_cost,
+        image_path: d.image_path || null,
         materials: picked
       };
       if (isNew) await api.post('/api/admin/items', payload);
@@ -333,6 +346,10 @@ function itemForm(item) {
       await load();
     }
   });
+
+  imageFolder = 'items';
+  const img = wireImageField(item?.image_path);
+  onModalCancel(img.cleanup);
 
   // running total of the picked materials — a sanity check against the price
   const box = document.getElementById('f-mats');
@@ -361,3 +378,88 @@ function itemForm(item) {
     recalc();
   }
 }
+
+/* ── image picker ───────────────────────────────────────────── */
+
+/* The bucket is private, so the preview goes through the panel's own signed
+   redirect rather than a public URL. `pending` is the path chosen in this
+   dialog but not yet saved — discarded if the dialog is cancelled. */
+const imageSrc = (path) => `/api/admin/images/view?path=${encodeURIComponent(path)}`;
+
+function imageFieldHTML(path) {
+  return `
+    <div class="field" style="margin-bottom:0">
+      <span class="field__label">Изображение</span>
+      <div class="imgpick" id="imgpick">
+        <div class="imgpick__preview" id="img-preview">
+          ${path ? `<img src="${imageSrc(path)}" alt="">` : '<span>нет</span>'}
+        </div>
+        <div class="imgpick__actions">
+          <input type="file" id="img-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
+          <input type="hidden" name="image_path" id="img-path" value="${esc(path || '')}">
+          <button type="button" class="btn btn--sm" id="img-choose">Загрузить</button>
+          <button type="button" class="btn btn--sm" id="img-clear" ${path ? '' : 'disabled'}>Убрать</button>
+          <p class="hint" id="img-hint">JPEG, PNG, WebP или GIF, до 5 МБ.</p>
+        </div>
+      </div>
+    </div>`;
+}
+
+/* Returns a cleanup() the caller runs on cancel, so an upload that was never
+   saved does not leave an orphan in the bucket. */
+function wireImageField(originalPath) {
+  const file = document.getElementById('img-file');
+  const hidden = document.getElementById('img-path');
+  const preview = document.getElementById('img-preview');
+  const hint = document.getElementById('img-hint');
+  const clear = document.getElementById('img-clear');
+  const uploaded = [];
+
+  const show = (path) => {
+    hidden.value = path || '';
+    clear.disabled = !path;
+    preview.innerHTML = path ? `<img src="${imageSrc(path)}" alt="">` : '<span>нет</span>';
+  };
+
+  document.getElementById('img-choose').onclick = () => file.click();
+
+  file.onchange = async () => {
+    const f = file.files?.[0];
+    if (!f) return;
+    if (f.size > 5 * 1024 * 1024) { hint.textContent = 'Файл больше 5 МБ'; return; }
+
+    hint.textContent = 'Загрузка…';
+    try {
+      // raw body, not multipart: one file and no form fields to encode
+      const res = await fetch(`/api/admin/images?folder=${imageFolder}`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': f.type },
+        body: f
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Не удалось загрузить');
+
+      uploaded.push(data.path);
+      show(data.path);
+      hint.textContent = 'Загружено.';
+    } catch (e) {
+      hint.textContent = e.message;
+    } finally {
+      file.value = '';
+    }
+  };
+
+  clear.onclick = () => { show(''); hint.textContent = 'Будет удалено при сохранении.'; };
+
+  return {
+    // everything uploaded in this dialog except what is actually being saved
+    cleanup() {
+      uploaded
+        .filter((path) => path !== hidden.value)
+        .forEach((path) => api.del(`/api/admin/images?path=${encodeURIComponent(path)}`).catch(() => {}));
+    }
+  };
+}
+
+let imageFolder = 'items';
