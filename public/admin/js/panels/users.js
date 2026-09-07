@@ -193,9 +193,9 @@ function openForm(user) {
       <div class="field">
         <label class="field__label" for="f-role">Роль</label>
         <select class="input" id="f-role" name="role">
-          <option value="employee" ${user?.role === 'employee' ? 'selected' : ''}>Сотрудник — заказы в мини-приложении</option>
-          <option value="owner" ${user?.role === 'owner' ? 'selected' : ''}>Владелец компании — получает уведомления</option>
-          <option value="admin" ${user?.role === 'admin' ? 'selected' : ''}>Админ — доступ к админ-панели</option>
+          <option value="employee" ${user?.role === 'employee' ? 'selected' : ''}>Сотрудник</option>
+          <option value="owner" ${user?.role === 'owner' ? 'selected' : ''}>Владелец</option>
+          <option value="admin" ${user?.role === 'admin' ? 'selected' : ''}>Админ</option>
         </select>
       </div>
       <div class="field">
