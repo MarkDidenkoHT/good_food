@@ -111,6 +111,11 @@ body.aside-compact .aside__tabs,
 body.aside-compact .aside__body { display: none; }
 body.aside-compact .aside__head { justify-content: center; padding: 0; }
 
+/* Collapsed, the panel is nothing but this button — it is the only way back
+   to the full panel, so it must never be the one thing that disappears. */
+#aside-expand { display: none; flex: 0 0 auto; }
+body.aside-compact #aside-expand { display: inline-flex; }
+
 .field { margin-bottom: 18px; }
 .field__label {
   display: block; font-size: 11px; font-weight: 800;
@@ -253,6 +258,8 @@ body.aside-compact .aside__head { justify-content: center; padding: 0; }
   body.aside-compact .shell { grid-template-columns: var(--nav-w-compact) minmax(0,1fr) var(--aside-w-compact); }
   .shell .nav__name, .shell .nav__label { display: none; }
   .aside__tabs, .aside__body { display: none; }
+  .aside__head { justify-content: center; padding: 0; }
+  #aside-expand { display: inline-flex; }
 }
 
 
@@ -315,3 +322,9 @@ body.aside-compact .aside__head { justify-content: center; padding: 0; }
 }
 .picker__qty:disabled { opacity: .4; cursor: not-allowed; }
 .chip__qty { color: var(--brand); font-weight: 800; }
+
+
+/* segmented-control buttons carry icons too */
+.seg button [data-icon] { display: inline-grid; place-items: center; flex: 0 0 auto; }
+.seg button [data-icon] svg { width: 15px; height: 15px; display: block; }
+.seg button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }

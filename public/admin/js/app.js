@@ -81,14 +81,11 @@ function buildNav() {
 }
 
 function wireChrome() {
-  const toggleCompact = () => {
-    prefsMod.set({ compact: !prefs.compact });
-    $('#aside-compact-icon').hidden = !prefs.compact;
-    buildAside();
-  };
+  // Visibility of the expand button is CSS's job (body.aside-compact), so
+  // the narrow-viewport breakpoint gets it for free.
+  const toggleCompact = () => { prefsMod.set({ compact: !prefs.compact }); buildAside(); };
   $('#nav-toggle').onclick = toggleCompact;
-  $('#aside-toggle').onclick = toggleCompact;
-  $('#aside-compact-icon').hidden = !prefs.compact;
+  $('#aside-expand').onclick = toggleCompact;
 
   $('#logout-btn').onclick = async () => {
     await api.post('/api/auth/admin/logout');
@@ -168,8 +165,12 @@ const visualTab = {
         <div class="field" style="margin-bottom:0">
           <span class="field__label">Боковые панели</span>
           <div class="seg" id="seg-compact">
-            <button data-v="full"    aria-pressed="${!prefs.compact}">Полные</button>
-            <button data-v="compact" aria-pressed="${!!prefs.compact}">Компактные</button>
+            <button data-v="full" aria-pressed="${!prefs.compact}">
+              <span data-icon="panel-right"></span>Полные
+            </button>
+            <button data-v="compact" aria-pressed="${!!prefs.compact}">
+              <span data-icon="panel-right"></span>Компактные
+            </button>
           </div>
           <p class="hint">В компактном режиме обе панели сжимаются до одних иконок.</p>
         </div>
