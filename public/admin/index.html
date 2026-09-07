@@ -44,9 +44,17 @@
     </div>
     <ul class="nav__list" id="nav-list"></ul>
     <div class="nav__foot">
-      <button class="btn btn--ghost btn--block" id="logout-btn" title="Выйти">
+      <button class="nav__link" id="compact-btn">
+        <span class="nav__icon" data-icon="panel-right"></span>
+        <span class="nav__label">Свернуть меню</span>
+      </button>
+      <button class="nav__link" id="theme-btn">
+        <span class="nav__icon" data-icon="moon"></span>
+        <span class="nav__label">Тёмная тема</span>
+      </button>
+      <button class="nav__link" id="logout-btn">
         <span class="nav__icon" data-icon="logout"></span>
-        <span class="nav__label" style="text-align:left">Выйти</span>
+        <span class="nav__label">Выйти</span>
       </button>
     </div>
   </nav>
@@ -67,13 +75,6 @@
     <div class="content" id="content"></div>
   </main>
 
-  <!-- right accessibility panel -->
-  <aside class="aside" aria-label="Панель настроек">
-    <div class="aside__head">
-      <div class="aside__tabs" id="aside-tabs" role="tablist"></div>
-    </div>
-    <div class="aside__body" id="aside-body"></div>
-  </aside>
 </div>
 
 <div class="toasts" id="toasts"></div>

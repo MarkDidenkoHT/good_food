@@ -41,38 +41,8 @@ export const usersPanel = {
     document.getElementById('users-refresh')?.addEventListener('click', () => load());
 
     await load();
-  },
+  }
 
-  // right-panel tab specific to this page
-  asideTabs: [{
-    id: 'users-view',
-    label: 'Таблица',
-    icon: 'users',
-    render() {
-      const el = h(`
-        <div>
-          <div class="field">
-            <span class="field__label">Отображение</span>
-            <label class="switch">
-              <span>Показывать отключённых</span>
-              <input type="checkbox" id="pref-show-disabled" ${showDisabled ? 'checked' : ''}>
-              <span class="switch__track"></span>
-            </label>
-            <p class="hint">Пользователи с выключенным доступом не смогут войти в мини-приложение.</p>
-          </div>
-          <div class="field">
-            <span class="field__label">Сводка</span>
-            <div class="pill">Всего: ${rows.length}</div>
-            <div class="pill pill--on" style="margin-top:6px">Активных: ${rows.filter((r) => r.access).length}</div>
-          </div>
-        </div>`);
-      el.querySelector('#pref-show-disabled').addEventListener('change', (e) => {
-        showDisabled = e.target.checked;
-        draw();
-      });
-      return el;
-    }
-  }]
 };
 
 async function load() {

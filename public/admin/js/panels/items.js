@@ -49,30 +49,8 @@ export const itemsPanel = {
     document.getElementById('cat-refresh')?.addEventListener('click', load);
 
     await load();
-  },
+  }
 
-  asideTabs: [{
-    id: 'items-summary',
-    label: 'Сводка',
-    icon: 'items',
-    render() {
-      const noCat = items.filter((i) => !i.item_category).length;
-      return h(`
-        <div>
-          <div class="field">
-            <span class="field__label">Каталог</span>
-            <div class="pill">Позиций: ${items.length}</div>
-            <div class="pill" style="margin-top:6px">Категорий: ${categories.length}</div>
-            <div class="pill" style="margin-top:6px">Материалов: ${materials.length}</div>
-          </div>
-          <div class="field" style="margin-bottom:0">
-            <span class="field__label">Без категории</span>
-            <div class="pill ${noCat ? 'pill--off' : 'pill--on'}">${noCat}</div>
-            <p class="hint">Показ по категориям в приложении можно включить, только когда у всех позиций есть категория.</p>
-          </div>
-        </div>`);
-    }
-  }]
 };
 
 async function load() {

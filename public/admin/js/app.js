@@ -14,7 +14,6 @@ const panels = [ordersPanel, itemsPanel, usersPanel, settingsPanel, messagesPane
 
 const $ = (sel) => document.querySelector(sel);
 let current = null;
-let asideTab = 'visual';
 
 /* ── boot ───────────────────────────────────────────────────── */
 prefsMod.loadLocal();
@@ -81,7 +80,11 @@ function buildNav() {
 }
 
 function wireChrome() {
-  $('#nav-toggle').onclick = () => { prefsMod.set({ compact: !prefs.compact }); buildAside(); };
+  $('#nav-toggle').onclick = toggleCompact;
+  $('#compact-btn').onclick = toggleCompact;
+  $('#theme-btn').onclick = () =>
+    setChrome({ theme: prefs.theme === 'dark' ? 'light' : 'dark' });
+  paintChrome();
 
   $('#logout-btn').onclick = async () => {
     await api.post('/api/auth/admin/logout');
@@ -120,63 +123,31 @@ async function navigate(panel) {
     toast(e.message, 'err');
   }
   paintIcons(content);
-
-  buildAside();
 }
 
-/* ── right accessibility panel ──────────────────────────────── */
-function buildAside() {
-  const tabs = [visualTab, ...(current.asideTabs || [])];
-  if (!tabs.some((t) => t.id === asideTab)) asideTab = tabs[0].id;
+/* ── nav foot: width + theme ─────────────────────────────────── */
 
-  const bar = $('#aside-tabs');
-  bar.innerHTML = '';
-  tabs.forEach((t) => {
-    const b = h(`
-      <button class="aside__tab" role="tab" aria-selected="${t.id === asideTab}" title="${esc(t.label)}">
-        <span class="aside__icon">${icon(t.icon || 'sliders')}</span>
-        <span class="aside__label">${esc(t.label)}</span>
-      </button>`);
-    b.onclick = () => { asideTab = t.id; buildAside(); };
-    bar.append(b);
-  });
+function toggleCompact() { setChrome({ compact: !prefs.compact }); }
 
-  const body = $('#aside-body');
-  body.innerHTML = '';
-  body.append(tabs.find((t) => t.id === asideTab).render());
-  paintIcons(body);
+function setChrome(patch) {
+  prefsMod.set(patch);
+  paintChrome();
 }
 
-/* Global tab — present on every panel. Two toggles, each shaped like a nav
-   link so the panel collapses to icons the same way the nav does. */
-const visualTab = {
-  id: 'visual',
-  label: 'Вид',
-  icon: 'sliders',
-  render() {
-    const dark = prefs.theme === 'dark';
-    const el = h(`
-      <div>
-        <button class="aside-row" id="row-compact"
-                title="${prefs.compact ? 'Развернуть панели' : 'Свернуть панели'}">
-          <span class="aside-row__icon">${icon(prefs.compact ? 'panel-left' : 'panel-right')}</span>
-          <span class="aside-row__label">${prefs.compact ? 'Развернуть панели' : 'Свернуть панели'}</span>
-        </button>
-        <button class="aside-row" id="row-theme"
-                title="${dark ? 'Светлая тема' : 'Тёмная тема'}">
-          <span class="aside-row__icon">${icon(dark ? 'sun' : 'moon')}</span>
-          <span class="aside-row__label">${dark ? 'Светлая тема' : 'Тёмная тема'}</span>
-        </button>
-      </div>`);
+/* Each foot button is a toggle, so it advertises what it will do next
+   rather than what is currently on. */
+function paintChrome() {
+  const dark = prefs.theme === 'dark';
 
-    el.querySelector('#row-compact').onclick = () => {
-      prefsMod.set({ compact: !prefs.compact });
-      buildAside();
-    };
-    el.querySelector('#row-theme').onclick = () => {
-      prefsMod.set({ theme: prefs.theme === 'dark' ? 'light' : 'dark' });
-      buildAside();
-    };
-    return el;
-  }
-};
+  const themeBtn = $('#theme-btn');
+  themeBtn.querySelector('.nav__label').textContent = dark ? 'Светлая тема' : 'Тёмная тема';
+  themeBtn.querySelector('.nav__icon').innerHTML = icon(dark ? 'sun' : 'moon');
+  themeBtn.title = themeBtn.querySelector('.nav__label').textContent;
+
+  const compactBtn = $('#compact-btn');
+  compactBtn.querySelector('.nav__label').textContent =
+    prefs.compact ? 'Развернуть меню' : 'Свернуть меню';
+  compactBtn.querySelector('.nav__icon').innerHTML =
+    icon(prefs.compact ? 'panel-left' : 'panel-right');
+  compactBtn.title = compactBtn.querySelector('.nav__label').textContent;
+}

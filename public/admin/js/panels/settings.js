@@ -26,24 +26,8 @@ export const settingsPanel = {
     root.append(h(`<div id="settings-body"></div>`));
     document.getElementById('set-refresh')?.addEventListener('click', load);
     await load();
-  },
+  }
 
-  asideTabs: [{
-    id: 'settings-help',
-    label: 'Справка',
-    icon: 'settings',
-    render: () => h(`
-      <div>
-        <div class="field" style="margin-bottom:0">
-          <span class="field__label">Каталог</span>
-          <p class="hint" style="margin-top:0">
-            Список — все позиции подряд, одним списком.<br><br>
-            По категориям — позиции сгруппированы заголовками категорий.
-            Включается, только когда у каждой позиции есть категория.
-          </p>
-        </div>
-      </div>`)
-  }]
 };
 
 async function load() {

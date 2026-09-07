@@ -40,5 +40,4 @@ export function set(patch) {
 export function apply() {
   document.documentElement.dataset.theme = prefs.theme === 'dark' ? 'dark' : 'light';
   document.body.classList.toggle('nav-compact', !!prefs.compact);
-  document.body.classList.toggle('aside-compact', !!prefs.compact);
 }
