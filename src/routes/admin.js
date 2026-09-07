@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { supabase, dbError } from '../lib/supabase.js';
 import { requireAdmin } from '../lib/auth.js';
 import { refreshUserNotice, announceOrderDecision } from '../lib/notices.js';
+import { sendMessage, kitchenGroupId, esc as tgEsc } from '../lib/telegram.js';
 
 export const adminRouter = Router();
 adminRouter.use(requireAdmin);
@@ -286,6 +287,117 @@ adminRouter.post('/orders/:id/decide', async (req, res) => {
 
   announceOrderDecision(data).catch((e) => console.error('[notices]', e));
   res.json(data);
+});
+
+/* What the kitchen has to make for a set of orders: the items, and the
+   materials those items consume. Returns are excluded — nothing is prepared
+   for goods coming back. Materials live only here and in the panel; the
+   mini-app never sees them. */
+async function summarise(ids) {
+  const { data: orders, error } = await supabase
+    .from('orders').select('id, kind, items, total').in('id', ids);
+  if (error) throw error;
+
+  const prep = (orders || []).filter((o) => o.kind === 'order');
+
+  // item id -> units to make
+  const itemQty = new Map();
+  for (const o of prep) {
+    for (const line of Array.isArray(o.items) ? o.items : []) {
+      const id = Number(line.id);
+      if (!Number.isFinite(id)) continue;
+      itemQty.set(id, (itemQty.get(id) || 0) + (Number(line.qty) || 0));
+    }
+  }
+
+  const { data: catalog, error: cErr } = await supabase
+    .from('items').select('id, item_name, materials').in('id', [...itemQty.keys()]);
+  if (cErr) throw cErr;
+
+  const byId = new Map((catalog || []).map((i) => [i.id, i]));
+  const { data: allMaterials } = await supabase.from('materials').select('id, material_name, cost');
+  const matById = new Map((allMaterials || []).map((m) => [m.id, m]));
+
+  const items = [];
+  const materials = new Map();   // material id -> { name, qty, cost }
+
+  for (const [id, qty] of itemQty) {
+    const item = byId.get(id);
+    items.push({ id, name: item?.item_name || `#${id}`, qty });
+
+    for (const m of Array.isArray(item?.materials) ? item.materials : []) {
+      const meta = matById.get(Number(m.id));
+      const need = (Number(m.qty) || 1) * qty;
+      const cur = materials.get(m.id) ||
+        { id: m.id, name: meta?.material_name || m.name || `#${m.id}`, qty: 0, cost: meta?.cost ?? 0 };
+      cur.qty += need;
+      materials.set(m.id, cur);
+    }
+  }
+
+  const list = [...materials.values()]
+    .map((m) => ({ ...m, total: m.qty * (m.cost || 0) }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+
+  return {
+    order_count: prep.length,
+    items: items.sort((a, b) => a.name.localeCompare(b.name, 'ru')),
+    materials: list,
+    materials_total: list.reduce((a, m) => a + m.total, 0)
+  };
+}
+
+adminRouter.post('/orders/summary', async (req, res) => {
+  const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter(Number.isFinite);
+  if (!ids.length) return res.status(400).json({ error: 'Нет выбранных заказов' });
+  try {
+    res.json(await summarise(ids));
+  } catch (e) {
+    return dbError(res, e, 500);
+  }
+});
+
+/* Post the prep list to the kitchen group. */
+adminRouter.post('/orders/send-kitchen', async (req, res) => {
+  const group = kitchenGroupId();
+  if (!group) {
+    return res.status(400).json({ error: 'TELEGRAM_KITCHEN_GROUP_ID не задан' });
+  }
+
+  const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter(Number.isFinite);
+  if (!ids.length) return res.status(400).json({ error: 'Нет выбранных заказов' });
+
+  let summary;
+  try {
+    summary = await summarise(ids);
+  } catch (e) {
+    return dbError(res, e, 500);
+  }
+  if (!summary.items.length) {
+    return res.status(400).json({ error: 'В выборке нет заказов на приготовление' });
+  }
+
+  const when = new Date().toLocaleString('ru-RU', {
+    timeZone: 'Europe/Chisinau', dateStyle: 'short', timeStyle: 'short'
+  });
+
+  const text = [
+    '<b>Список на приготовление</b>',
+    `Заказов: ${summary.order_count}`,
+    '',
+    '<b>Позиции</b>',
+    ...summary.items.map((i) => `• ${tgEsc(i.name)} — ${i.qty} шт.`),
+    '',
+    '<b>Материалы</b>',
+    ...summary.materials.map((m) => `• ${tgEsc(m.name)} — ${m.qty} шт.`),
+    '',
+    `Себестоимость материалов: <b>${summary.materials_total} ₽</b>`,
+    `<i>отправлено ${when}</i>`
+  ].join('\n');
+
+  const sent = await sendMessage(group, text);
+  if (!sent?.ok) return res.status(502).json({ error: 'Telegram не принял сообщение' });
+  res.json({ ok: true, ...summary });
 });
 
 /* ---------- app settings ---------- */

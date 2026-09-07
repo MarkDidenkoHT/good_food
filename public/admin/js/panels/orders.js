@@ -17,7 +17,7 @@ const filters = {
   to: today(),
   status: 'new',
   kind: 'all',
-  company: 'all'
+  company: ''        // free text: matches the company name, empty = all
 };
 
 const KIND = { order: 'Заказ', return: 'Возврат' };
@@ -53,7 +53,7 @@ export const ordersPanel = {
       filters.to = '';
       filters.status = 'all';
       filters.kind = 'all';
-      filters.company = 'all';
+      filters.company = '';
     }
 
     root.append(h(`
@@ -103,6 +103,13 @@ function drawToolbar() {
     <button class="btn btn--sm" id="f-today">Сегодня</button>
     <button class="btn btn--sm" id="f-all-time">Всё время</button>
 
+    <span class="toolbar__sep"></span>
+
+    <button class="btn btn--sm" id="b-export-orders">Заказы CSV</button>
+    <button class="btn btn--sm" id="b-export-returns">Возвраты CSV</button>
+    <button class="btn btn--sm" id="b-export-materials">Материалы CSV</button>
+    <button class="btn btn--sm btn--primary" id="b-send-kitchen">На кухню</button>
+
     <div style="flex:1 1 auto"></div>
 
     <select class="input input--sm" id="f-status" title="Статус">
@@ -118,13 +125,11 @@ function drawToolbar() {
       <option value="return" ${filters.kind === 'return' ? 'selected' : ''}>Возвраты</option>
     </select>
 
-    <select class="input input--sm" id="f-company" title="Компания">
-      <option value="all" ${filters.company === 'all' ? 'selected' : ''}>Все компании</option>
-      ${companies.map((c) => `
-        <option value="${c.id}" ${String(filters.company) === String(c.id) ? 'selected' : ''}>
-          ${esc(c.company_name || `#${c.id}`)}
-        </option>`).join('')}
-    </select>`;
+    <input class="input input--sm" id="f-company" list="company-options"
+           placeholder="Все компании" value="${esc(filters.company)}" title="Компания">
+    <datalist id="company-options">
+      ${companies.map((c) => `<option value="${esc(c.company_name || `#${c.id}`)}"></option>`).join('')}
+    </datalist>`;
 
   // dates need a round trip; the rest filter what is already loaded
   bar.querySelector('#f-from').onchange = (e) => { filters.from = e.target.value; load(); };
@@ -139,14 +144,22 @@ function drawToolbar() {
   };
   bar.querySelector('#f-status').onchange = (e) => { filters.status = e.target.value; draw(); };
   bar.querySelector('#f-kind').onchange = (e) => { filters.kind = e.target.value; draw(); };
-  bar.querySelector('#f-company').onchange = (e) => { filters.company = e.target.value; draw(); };
+  // typed, not picked: filter as they go rather than only on change
+  bar.querySelector('#f-company').oninput = (e) => { filters.company = e.target.value; draw(); };
+
+  bar.querySelector('#b-export-orders').onclick = () => exportOrders('order');
+  bar.querySelector('#b-export-returns').onclick = () => exportOrders('return');
+  bar.querySelector('#b-export-materials').onclick = exportMaterials;
+  bar.querySelector('#b-send-kitchen').onclick = sendToKitchen;
 }
 
 function visible() {
   return rows.filter((o) =>
     (filters.status === 'all' || o.status === filters.status) &&
     (filters.kind === 'all' || o.kind === filters.kind) &&
-    (filters.company === 'all' || String(o.company_id) === String(filters.company)));
+    (!filters.company.trim() ||
+      String(o.companies?.company_name || '').toLowerCase()
+        .includes(filters.company.trim().toLowerCase())));
 }
 
 function draw() {
@@ -168,13 +181,16 @@ function draw() {
         <th style="width:180px">Компания</th><th style="width:150px">Заказал</th>
         <th>Позиции</th><th style="width:100px">Итого</th>
         <th style="width:130px">Статус</th><th style="width:150px">Создан</th>
-        <th style="width:130px"></th>
+        <th style="width:220px"></th>
       </tr></thead>
       <tbody>${list.map(rowHTML).join('')}</tbody>
     </table>`;
 
   wrap.querySelectorAll('[data-decide]').forEach((b) => {
     b.onclick = () => decide(b.dataset.decide, b.dataset.status);
+  });
+  wrap.querySelectorAll('[data-invoice]').forEach((b) => {
+    b.onclick = () => printInvoice(b.dataset.invoice);
   });
 
   paintIcons(wrap);
@@ -200,8 +216,8 @@ function rowHTML(o) {
       <td><div class="row-actions">
         ${o.status === 'new' ? `
           <button class="btn btn--sm btn--primary" data-decide="${o.id}" data-status="confirmed">Принять</button>
-          <button class="btn btn--sm" data-decide="${o.id}" data-status="rejected">Отклонить</button>`
-        : '<span style="color:var(--ink-3);font-size:12px">—</span>'}
+          <button class="btn btn--sm" data-decide="${o.id}" data-status="rejected">Отклонить</button>` : ''}
+        <button class="btn btn--ghost btn--icon btn--sm" data-invoice="${o.id}" title="Печать накладной"><span data-icon="print"></span></button>
       </div></td>
     </tr>`;
 }
@@ -236,4 +252,98 @@ function applyFocus() {
   row.classList.remove('row-flash');
   void row.offsetWidth;
   row.classList.add('row-flash');
+}
+
+
+/* ── export / kitchen ───────────────────────────────────────── */
+
+/* Excel on a Russian locale reads ';' as the separator and needs the BOM to
+   detect UTF-8; without both, Cyrillic arrives as mojibake in one column. */
+function downloadCsv(name, rowsOut) {
+  const body = rowsOut
+    .map((r) => r.map((cell) => {
+      const v = String(cell ?? '');
+      return /[";\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+    }).join(';'))
+    .join('\r\n');
+
+  const blob = new Blob([`﻿${body}`], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${name}_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportOrders(kind) {
+  const list = visible().filter((o) => o.kind === kind);
+  if (!list.length) {
+    return toast(kind === 'return' ? 'Возвратов в выборке нет' : 'Заказов в выборке нет', 'err');
+  }
+
+  const out = [['№', 'Тип', 'Компания', 'Заказал', 'Позиция', 'Кол-во', 'Цена', 'Сумма', 'Статус', 'Создан']];
+  for (const o of list) {
+    const lines = Array.isArray(o.items) ? o.items : [];
+    // one row per line so the file pivots cleanly in a spreadsheet
+    if (!lines.length) {
+      out.push([o.id, KIND[o.kind], o.companies?.company_name || '', o.users?.user_name || '',
+                '', '', '', o.total ?? 0, STATUS[o.status]?.[0] || o.status, fmtDate(o.created_at)]);
+      continue;
+    }
+    for (const l of lines) {
+      out.push([o.id, KIND[o.kind], o.companies?.company_name || '', o.users?.user_name || '',
+                l.name, l.qty, l.cost, l.cost * l.qty,
+                STATUS[o.status]?.[0] || o.status, fmtDate(o.created_at)]);
+    }
+  }
+  downloadCsv(kind === 'return' ? 'vozvraty' : 'zakazy', out);
+  toast(`Выгружено: ${list.length}`);
+}
+
+function selectedIds() {
+  return visible().map((o) => o.id);
+}
+
+async function exportMaterials() {
+  const ids = selectedIds();
+  if (!ids.length) return toast('В выборке нет заказов', 'err');
+
+  try {
+    const s = await api.post('/api/admin/orders/summary', { ids });
+    if (!s.materials.length) return toast('Материалы не заданы у позиций', 'err');
+
+    const out = [['Материал', 'Количество', 'Себестоимость', 'Сумма']];
+    s.materials.forEach((m) => out.push([m.name, m.qty, m.cost, m.total]));
+    out.push([]);
+    out.push(['Итого', '', '', s.materials_total]);
+    out.push([]);
+    out.push(['Позиция', 'К приготовлению']);
+    s.items.forEach((i) => out.push([i.name, i.qty]));
+
+    downloadCsv('materialy', out);
+    toast(`Материалов: ${s.materials.length}`);
+  } catch (e) {
+    toast(e.message, 'err');
+  }
+}
+
+function sendToKitchen() {
+  const ids = selectedIds();
+  if (!ids.length) return toast('В выборке нет заказов', 'err');
+
+  confirmDialog(
+    'Отправить на кухню',
+    `Отправить список на приготовление по ${ids.length} заказам в группу кухни?`,
+    async () => {
+      const s = await api.post('/api/admin/orders/send-kitchen', { ids });
+      toast(`Отправлено: ${s.items.length} позиций`);
+    },
+    'Отправить'
+  );
+}
+
+function printInvoice(id) {
+  // The real накладная waits on the blank the client will supply.
+  toast(`Накладная для заказа #${id} — шаблон ещё не готов`);
 }

@@ -7,6 +7,7 @@ const API = 'https://api.telegram.org';
 
 export const botToken = () => process.env.TELEGRAM_BOT_TOKEN || '';
 export const adminGroupId = () => process.env.TELEGRAM_ADMIN_GROUP_ID || '';
+export const kitchenGroupId = () => process.env.TELEGRAM_KITCHEN_GROUP_ID || '';
 
 export function botConfigured() {
   return Boolean(botToken());

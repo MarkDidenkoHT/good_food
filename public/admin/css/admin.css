@@ -323,3 +323,4 @@ body.nav-compact .nav__list { padding: 10px 8px; }
 }
 select.input--sm { cursor: pointer; }
 input[type="date"].input--sm { min-width: 140px; }
+.toolbar__sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 2px; }
