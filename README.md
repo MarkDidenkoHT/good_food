@@ -26,14 +26,21 @@ Three blocks: left nav (300px) · main content · right accessibility panel (300
 - Working today: **Пользователи** (create/edit/delete companies, generate access
   codes, toggle access). Everything else is a placeholder.
 
-Login: `ADMIN_USERNAME` / `ADMIN_PASSWORD` → signed httpOnly cookie (12h).
+Login: access code of a `public.users` row with `role = 'admin'` → signed
+httpOnly cookie (12h). Owner codes are rejected here, admin codes are rejected
+by the mini-app.
 
 ## Company users
 
-Created in the admin panel; each gets a short code (no 0/O/1/I) and a role:
+Everyone — admins and companies alike — is a row in `public.users` with a code
+(no 0/O/1/I) and a role. The role decides which surface the code opens:
 
-- `owner` (default) — the companies that will use the Telegram mini-app.
-- `admin` — reserved for admin-panel operators; blocked from the mini-app login.
+- `owner` (default) — the companies, 6-char code, Telegram mini-app.
+- `admin` — panel operators, 10-char code, `/admin`.
+
+Admins are created in the panel like anyone else. The **first** one has to be
+inserted by `db/schema.sql` (see the bootstrap block) since the panel is what
+creates users. The API refuses to delete or demote the last enabled admin.
 
 The mini-app exchanges the code for a 30-day cookie and stamps `last_login`.
 
@@ -41,7 +48,7 @@ The mini-app exchanges the code for a 30-day cookie and stamps `last_login`.
 
 ```bash
 npm install
-cp .env.example .env   # fill in Supabase + admin creds
+cp .env.example .env   # fill in Supabase + JWT_SECRET
 npm run dev
 ```
 

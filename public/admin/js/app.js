@@ -40,13 +40,10 @@ function showLogin() {
     err.hidden = true;
     try {
       const fd = new FormData(form);
-      await api.post('/api/auth/admin/login', {
-        username: fd.get('username'),
-        password: fd.get('password')
-      });
+      await api.post('/api/auth/admin/login', { code: fd.get('code') });
       showShell();
     } catch (ex) {
-      err.textContent = ex instanceof Unauthorized ? 'Неверный логин или пароль' : ex.message;
+      err.textContent = ex instanceof Unauthorized ? 'Неверный код' : ex.message;
       err.hidden = false;
     }
   };

@@ -19,39 +19,48 @@ adminRouter.get('/users', async (req, res) => {
 adminRouter.post('/users', async (req, res) => {
   const body = pickUser(req.body);
   if (!body.user_name) return res.status(400).json({ error: 'Name required' });
-  if (!body.user_code) body.user_code = randomCode();
+  if (!body.user_code) body.user_code = randomCode(body.role === 'admin' ? 10 : 6);
   const { data, error } = await supabase.from('users').insert(body).select().single();
   if (error) return dbError(res, error);
   res.status(201).json(data);
 });
 
 adminRouter.patch('/users/:id', async (req, res) => {
+  const patch = pickUser(req.body);
+  const demoted = patch.role === 'owner' || patch.access === false;
+  if (demoted && await isLastAdmin(req.params.id)) {
+    return res.status(409).json({ error: 'Нельзя снять права у последнего администратора' });
+  }
   const { data, error } = await supabase
-    .from('users').update(pickUser(req.body)).eq('id', req.params.id).select().single();
+    .from('users').update(patch).eq('id', req.params.id).select().single();
   if (error) return dbError(res, error);
   res.json(data);
 });
 
 adminRouter.delete('/users/:id', async (req, res) => {
+  if (await isLastAdmin(req.params.id)) {
+    return res.status(409).json({ error: 'Нельзя удалить последнего администратора' });
+  }
   const { error } = await supabase.from('users').delete().eq('id', req.params.id);
   if (error) return dbError(res, error);
   res.json({ ok: true });
 });
 
-adminRouter.get('/users/new-code', (req, res) => res.json({ code: randomCode() }));
+adminRouter.get('/users/new-code', (req, res) =>
+  res.json({ code: randomCode(req.query.role === 'admin' ? 10 : 6) }));
 
 /* ---------- admin UI prefs (right accessibility panel) ---------- */
 
 adminRouter.get('/prefs', async (req, res) => {
   const { data, error } = await supabase
-    .from('admin_prefs').select('prefs').eq('admin_key', req.admin.username).maybeSingle();
+    .from('admin_prefs').select('prefs').eq('admin_key', String(req.admin.id)).maybeSingle();
   if (error) return dbError(res, error, 500);
   res.json(data?.prefs || {});
 });
 
 adminRouter.put('/prefs', async (req, res) => {
   const { error } = await supabase.from('admin_prefs').upsert({
-    admin_key: req.admin.username,
+    admin_key: String(req.admin.id),
     prefs: req.body || {},
     updated_at: new Date().toISOString()
   });
@@ -60,6 +69,14 @@ adminRouter.put('/prefs', async (req, res) => {
 });
 
 /* ---------- helpers ---------- */
+
+/* True when `id` is an admin with access and no other such admin exists. */
+async function isLastAdmin(id) {
+  const { data } = await supabase
+    .from('users').select('id').eq('role', 'admin').eq('access', true);
+  const admins = data || [];
+  return admins.length <= 1 && admins.some((a) => String(a.id) === String(id));
+}
 
 function pickUser(b = {}) {
   const out = {};

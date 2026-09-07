@@ -4,16 +4,45 @@ import { sign, cookieOpts, ADMIN_COOKIE, USER_COOKIE, requireAdmin, requireUser 
 
 export const authRouter = Router();
 
-/* ---------- admin ---------- */
+/* One credential for everyone: the code from public.users. The row's role
+   decides which surface you get — 'admin' → admin panel, 'owner' → mini-app.
+   Neither login accepts the other's role, so a leaked owner code can never
+   reach the panel. */
 
-authRouter.post('/admin/login', (req, res) => {
-  const { username, password } = req.body || {};
-  const okUser = username === (process.env.ADMIN_USERNAME || 'admin');
-  const okPass = password && password === process.env.ADMIN_PASSWORD;
-  if (!okUser || !okPass) return res.status(401).json({ error: 'Invalid credentials' });
+async function findByCode(code) {
+  return supabase
+    .from('users')
+    .select('id, user_name, user_code, access, role')
+    .eq('user_code', code)
+    .maybeSingle();
+}
 
-  res.cookie(ADMIN_COOKIE, sign({ role: 'admin', username }), cookieOpts(12 * 3600 * 1000));
-  res.json({ ok: true, username });
+function stampLogin(id) {
+  return supabase.from('users').update({ last_login: new Date().toISOString() }).eq('id', id);
+}
+
+/* ---------- admin panel ---------- */
+
+authRouter.post('/admin/login', async (req, res) => {
+  const code = String(req.body?.code || '').trim().toUpperCase();
+  if (!code) return res.status(400).json({ error: 'Code required' });
+
+  const { data, error } = await findByCode(code);
+  if (error) return dbError(res, error, 500);
+
+  // Same 401 for "no such code" and "not an admin" — don't confirm to a
+  // holder of an owner code that their code is valid somewhere.
+  if (!data || data.role !== 'admin') return res.status(401).json({ error: 'Invalid code' });
+  if (data.access === false) return res.status(403).json({ error: 'Access disabled' });
+
+  await stampLogin(data.id);
+
+  res.cookie(
+    ADMIN_COOKIE,
+    sign({ role: 'admin', id: data.id, name: data.user_name }, '12h'),
+    cookieOpts(12 * 3600 * 1000)
+  );
+  res.json({ ok: true, id: data.id, user_name: data.user_name });
 });
 
 authRouter.post('/admin/logout', (req, res) => {
@@ -22,27 +51,22 @@ authRouter.post('/admin/logout', (req, res) => {
 });
 
 authRouter.get('/admin/me', requireAdmin, (req, res) => {
-  res.json({ username: req.admin.username });
+  res.json({ id: req.admin.id, user_name: req.admin.name });
 });
 
 /* ---------- company users (mini-app) ---------- */
 
 authRouter.post('/user/login', async (req, res) => {
-  const code = String(req.body?.code || '').trim();
+  const code = String(req.body?.code || '').trim().toUpperCase();
   if (!code) return res.status(400).json({ error: 'Code required' });
 
-  const { data, error } = await supabase
-    .from('users')
-    .select('id, user_name, user_code, access, role')
-    .eq('user_code', code)
-    .maybeSingle();
-
+  const { data, error } = await findByCode(code);
   if (error) return dbError(res, error, 500);
-  if (!data) return res.status(401).json({ error: 'Unknown code' });
-  if (data.access === false) return res.status(403).json({ error: 'Access disabled' });
-  if (data.role === 'admin') return res.status(403).json({ error: 'Admins use the admin panel' });
 
-  await supabase.from('users').update({ last_login: new Date().toISOString() }).eq('id', data.id);
+  if (!data || data.role === 'admin') return res.status(401).json({ error: 'Unknown code' });
+  if (data.access === false) return res.status(403).json({ error: 'Access disabled' });
+
+  await stampLogin(data.id);
 
   res.cookie(
     USER_COOKIE,

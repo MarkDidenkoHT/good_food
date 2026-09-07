@@ -198,7 +198,8 @@ function openForm(user) {
   });
 
   document.getElementById('f-gen').onclick = async () => {
-    const { code } = await api.get('/api/admin/users/new-code');
+    const role = document.getElementById('f-role').value;
+    const { code } = await api.get(`/api/admin/users/new-code?role=${role}`);
     document.getElementById('f-code').value = code;
   };
 }

@@ -22,12 +22,9 @@
     <form class="card" id="login-form">
       <div class="card__body">
         <div class="field">
-          <label class="field__label" for="login-user">Логин</label>
-          <input class="input" id="login-user" name="username" autocomplete="username" value="admin" required>
-        </div>
-        <div class="field">
-          <label class="field__label" for="login-pass">Пароль</label>
-          <input class="input" id="login-pass" name="password" type="password" autocomplete="current-password" required>
+          <label class="field__label" for="login-code">Код доступа</label>
+          <input class="input input--code" id="login-code" name="code" autocomplete="one-time-code"
+                 autocapitalize="characters" spellcheck="false" maxlength="12" required autofocus>
         </div>
         <button class="btn btn--primary btn--block" type="submit">Войти</button>
         <p class="hint" id="login-error" style="color:var(--danger)" hidden></p>
