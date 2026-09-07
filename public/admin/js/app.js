@@ -6,7 +6,8 @@ import { prefs } from './prefs.js';
 import { usersPanel } from './panels/users.js';
 import { itemsPanel } from './panels/items.js';
 import { settingsPanel } from './panels/settings.js';
-import { ordersPanel, messagesPanel, cronPanel } from './panels/placeholders.js';
+import { ordersPanel } from './panels/orders.js';
+import { messagesPanel, cronPanel } from './panels/placeholders.js';
 
 /* Nav order. Users sits first while it is the only working panel; the final
    order is orders → items → users → settings → messages → cron. */

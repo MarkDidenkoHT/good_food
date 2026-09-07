@@ -64,11 +64,11 @@ export function modal({ title, bodyHTML, submitLabel = 'Сохранить', onS
   return { close };
 }
 
-export function confirmDialog(title, text, onYes) {
+export function confirmDialog(title, text, onYes, submitLabel = 'Удалить') {
   return modal({
     title,
     bodyHTML: `<p style="margin:0">${esc(text)}</p>`,
-    submitLabel: 'Удалить',
+    submitLabel,
     onSubmit: onYes
   });
 }

@@ -1,6 +1,8 @@
 /* Thin Telegram Bot API client. No SDK — the bot only sends messages and
    answers a webhook, so a fetch wrapper is the whole surface. */
 
+import crypto from 'node:crypto';
+
 const API = 'https://api.telegram.org';
 
 export const botToken = () => process.env.TELEGRAM_BOT_TOKEN || '';
@@ -73,3 +75,48 @@ export function notifyAdmins(text) {
 
 export const esc = (s) =>
   String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+/* ── Mini App initData ────────────────────────────────────────────────────
+   The mini-app runs in the user's browser, so anything it claims about who
+   is using it is forgeable. Telegram signs the launch payload with a key
+   derived from the bot token; verifying that signature is the only way to
+   trust the chat id. Never take a chat id from the client unverified. */
+export function verifyInitData(initData, maxAgeSec = 86400) {
+  const token = botToken();
+  if (!token || !initData) return null;
+
+  let params;
+  try {
+    params = new URLSearchParams(initData);
+  } catch {
+    return null;
+  }
+
+  const hash = params.get('hash');
+  if (!hash) return null;
+  params.delete('hash');
+
+  const checkString = [...params.entries()]
+    .map(([k, v]) => `${k}=${v}`)
+    .sort()
+    .join('\n');
+
+  const secret = crypto.createHmac('sha256', 'WebAppData').update(token).digest();
+  const expected = crypto.createHmac('sha256', secret).update(checkString).digest('hex');
+
+  const a = Buffer.from(expected, 'hex');
+  const b = Buffer.from(hash, 'hex');
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+
+  // A valid signature is forever; the timestamp is what stops a captured
+  // initData string being replayed weeks later.
+  const authDate = Number(params.get('auth_date') || 0);
+  if (!authDate || (Date.now() / 1000) - authDate > maxAgeSec) return null;
+
+  try {
+    const user = JSON.parse(params.get('user') || 'null');
+    return user?.id ? user : null;
+  } catch {
+    return null;
+  }
+}

@@ -6,7 +6,10 @@ import { paintIcons } from '../icons.js';
    category only works if every item has one, so the save is allowed to fail
    with the list of offenders and we render it inline. */
 
-let settings = { catalog: { group_by_category: false } };
+let settings = {
+  catalog: { group_by_category: false },
+  notifications: { notify_owner: true }
+};
 let orphans = [];
 let root;
 
@@ -30,6 +33,13 @@ export const settingsPanel = {
 
 };
 
+/* h() returns one element; this screen renders two sibling cards. */
+function frag(html) {
+  const t = document.createElement('div');
+  t.innerHTML = html.trim();
+  return t;
+}
+
 async function load() {
   try {
     settings = await api.get('/api/admin/settings');
@@ -44,9 +54,10 @@ function draw() {
   const body = root?.querySelector('#settings-body');
   if (!body) return;
   const grouped = !!settings.catalog?.group_by_category;
+  const notifyOwner = settings.notifications?.notify_owner !== false;
 
   body.innerHTML = '';
-  const card = h(`
+  const card = frag(`
     <div class="card">
       <div class="card__head"><div class="card__title">Каталог в приложении</div></div>
       <div class="card__body">
@@ -60,10 +71,29 @@ function draw() {
         </div>
         <div id="settings-error"></div>
       </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card__head"><div class="card__title">Уведомления о заказах</div></div>
+      <div class="card__body">
+        <div class="field" style="margin-bottom:0">
+          <span class="field__label">Кого уведомлять при подтверждении</span>
+          <div class="seg" id="seg-notify">
+            <button data-v="author" aria-pressed="${!notifyOwner}">Только заказчика</button>
+            <button data-v="both"   aria-pressed="${notifyOwner}">Заказчика и владельца</button>
+          </div>
+          <p class="hint">Владелец компании — сотрудник с ролью «Владелец».
+             Если заказ сделал он сам, сообщение придёт один раз.</p>
+        </div>
+      </div>
     </div>`);
 
   card.querySelectorAll('#seg-catalog button').forEach((b) => {
     b.onclick = () => save(b.dataset.v === 'grouped');
+  });
+
+  card.querySelectorAll('#seg-notify button').forEach((b) => {
+    b.onclick = () => saveNotify(b.dataset.v === 'both');
   });
 
   body.append(card);
@@ -102,6 +132,17 @@ async function save(grouped) {
       toast(e.message, 'err');
       return;
     }
+    toast(e.message, 'err');
+  }
+}
+
+async function saveNotify(notifyOwner) {
+  try {
+    const res = await api.put('/api/admin/settings/notifications', { notify_owner: notifyOwner });
+    settings.notifications = res.value;
+    draw();
+    toast('Настройка сохранена');
+  } catch (e) {
     toast(e.message, 'err');
   }
 }

@@ -7,12 +7,6 @@ const stub = (id, label, icon, subtitle, text) => ({
   render(container) { container.append(placeholder(label, text)); }
 });
 
-export const ordersPanel = stub(
-  'orders', 'Заказы', 'orders',
-  'Входящие заказы компаний',
-  'Раздел заказов появится после подключения каталога и корзины мини-приложения.'
-);
-
 export const messagesPanel = stub(
   'messages', 'Сообщения', 'messages',
   'Рассылки пользователям',

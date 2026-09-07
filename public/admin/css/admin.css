@@ -302,3 +302,6 @@ body.nav-compact .nav__list { padding: 10px 8px; }
 @media (prefers-reduced-motion: reduce) {
   .row-flash > td { animation: none; background: var(--brand-soft); }
 }
+
+.pill--warn { background: #fff3cd; color: #8a6100; }
+[data-theme="dark"] .pill--warn { background: #3d3417; color: #ffd479; }

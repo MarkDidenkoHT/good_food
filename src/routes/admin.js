@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { supabase, dbError } from '../lib/supabase.js';
 import { requireAdmin } from '../lib/auth.js';
-import { refreshUserNotice } from '../lib/notices.js';
+import { refreshUserNotice, announceOrderDecision } from '../lib/notices.js';
 
 export const adminRouter = Router();
 adminRouter.use(requireAdmin);
@@ -10,7 +10,9 @@ adminRouter.use(requireAdmin);
 
 adminRouter.get('/users', async (req, res) => {
   const q = String(req.query.q || '').trim();
-  let query = supabase.from('users').select('*').order('id', { ascending: false });
+  let query = supabase.from('users')
+    .select('*, companies(company_name)')
+    .order('id', { ascending: false });
   if (q) query = query.or(`user_name.ilike.%${q}%,user_code.ilike.%${q}%`);
   const { data, error } = await query;
   if (error) return dbError(res, error, 500);
@@ -34,7 +36,7 @@ adminRouter.patch('/users/:id', async (req, res) => {
   if (patch.role === 'admin' && 'chat_id' in patch && patch.chat_id === null) {
     return res.status(400).json({ error: 'Администратору нужен chat_id для входа' });
   }
-  const demoted = patch.role === 'owner' || patch.access === false;
+  const demoted = (patch.role && patch.role !== 'admin') || patch.access === false;
   if (demoted && await isLastAdmin(req.params.id)) {
     return res.status(409).json({ error: 'Нельзя снять права у последнего администратора' });
   }
@@ -201,10 +203,87 @@ adminRouter.delete('/items/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
+/* ---------- companies ---------- */
+
+adminRouter.get('/companies', async (req, res) => {
+  const { data, error } = await supabase
+    .from('companies').select('*').order('id', { ascending: false });
+  if (error) return dbError(res, error, 500);
+  res.json(data);
+});
+
+adminRouter.post('/companies', async (req, res) => {
+  const body = pickCompany(req.body);
+  if (!body.company_name) return res.status(400).json({ error: 'Название обязательно' });
+  if (!body.company_code) body.company_code = randomCode(6);
+  const { data, error } = await supabase.from('companies').insert(body).select().single();
+  if (error) return dbError(res, error);
+  res.status(201).json(data);
+});
+
+adminRouter.patch('/companies/:id', async (req, res) => {
+  const patch = { ...pickCompany(req.body), updated_at: new Date().toISOString() };
+  const { data, error } = await supabase
+    .from('companies').update(patch).eq('id', req.params.id).select().single();
+  if (error) return dbError(res, error);
+  res.json(data);
+});
+
+adminRouter.delete('/companies/:id', async (req, res) => {
+  // users and orders keep their rows; the FKs null out the link
+  const { error } = await supabase.from('companies').delete().eq('id', req.params.id);
+  if (error) return dbError(res, error);
+  res.json({ ok: true });
+});
+
+/* ---------- orders ---------- */
+
+adminRouter.get('/orders', async (req, res) => {
+  const status = String(req.query.status || '').trim();
+  let q = supabase
+    .from('orders')
+    .select('*, companies(company_name), users(user_name)')
+    .order('created_at', { ascending: false })
+    .limit(200);
+  if (['new', 'confirmed', 'rejected'].includes(status)) q = q.eq('status', status);
+
+  const { data, error } = await q;
+  if (error) return dbError(res, error, 500);
+  res.json(data);
+});
+
+/* Confirm or reject. Deciding twice is refused rather than silently
+   re-notifying everyone. */
+adminRouter.post('/orders/:id/decide', async (req, res) => {
+  const status = req.body?.status;
+  if (!['confirmed', 'rejected'].includes(status)) {
+    return res.status(400).json({ error: 'Неверный статус' });
+  }
+
+  const { data: current, error: findErr } = await supabase
+    .from('orders').select('id, status').eq('id', req.params.id).maybeSingle();
+  if (findErr) return dbError(res, findErr, 500);
+  if (!current) return res.status(404).json({ error: 'Заказ не найден' });
+  if (current.status !== 'new') {
+    return res.status(409).json({ error: 'Заказ уже обработан' });
+  }
+
+  const { data, error } = await supabase
+    .from('orders')
+    .update({ status, decided_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq('id', req.params.id)
+    .select().single();
+  if (error) return dbError(res, error);
+
+  announceOrderDecision(data).catch((e) => console.error('[notices]', e));
+  res.json(data);
+});
+
 /* ---------- app settings ---------- */
 
 const SETTING_DEFAULTS = {
-  catalog: { group_by_category: false }
+  catalog: { group_by_category: false },
+  notifications: { notify_owner: true }
 };
 
 adminRouter.get('/settings', async (req, res) => {
@@ -213,6 +292,15 @@ adminRouter.get('/settings', async (req, res) => {
   const out = structuredClone(SETTING_DEFAULTS);
   for (const row of data || []) out[row.key] = { ...out[row.key], ...row.value };
   res.json(out);
+});
+
+adminRouter.put('/settings/notifications', async (req, res) => {
+  const value = { notify_owner: !!req.body?.notify_owner };
+  const { error } = await supabase.from('app_settings').upsert({
+    key: 'notifications', value, updated_at: new Date().toISOString()
+  });
+  if (error) return dbError(res, error);
+  res.json({ ok: true, value });
 });
 
 adminRouter.put('/settings/catalog', async (req, res) => {
@@ -258,6 +346,14 @@ adminRouter.put('/prefs', async (req, res) => {
 });
 
 /* ---------- helpers ---------- */
+function pickCompany(b = {}) {
+  const out = {};
+  if ('company_name' in b) out.company_name = b.company_name?.trim() || null;
+  if ('company_code' in b) out.company_code = b.company_code?.trim() || null;
+  if ('access' in b) out.access = !!b.access;
+  return out;
+}
+
 function pickMaterial(b = {}) {
   const out = {};
   if ('material_name' in b) out.material_name = b.material_name?.trim() || null;
@@ -319,7 +415,13 @@ function pickUser(b = {}) {
   if ('user_name' in b) out.user_name = b.user_name?.trim() || null;
   if ('user_code' in b) out.user_code = b.user_code?.trim() || null;
   if ('access' in b) out.access = !!b.access;
-  if ('role' in b) out.role = b.role === 'admin' ? 'admin' : 'owner';
+  if ('role' in b) {
+    out.role = ['admin', 'owner', 'employee'].includes(b.role) ? b.role : 'employee';
+  }
+  if ('company_id' in b) {
+    const n = Number(b.company_id);
+    out.company_id = Number.isFinite(n) && n > 0 ? n : null;
+  }
   if ('chat_id' in b) out.chat_id = toChatId(b.chat_id);
   return out;
 }

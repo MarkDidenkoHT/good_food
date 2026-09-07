@@ -72,3 +72,119 @@ export async function refreshUserNotice(user, opts = {}) {
     reply_markup: markup(user, opts)
   });
 }
+
+
+/* ── orders ───────────────────────────────────────────────────────────── */
+
+const KIND = { order: 'Заказ', return: 'Возврат' };
+const STATUS = {
+  new:       '🕒 <b>Новый</b>',
+  confirmed: '✅ <b>Подтверждён</b>',
+  rejected:  '❌ <b>Отклонён</b>'
+};
+
+const orderUrl = (orderId) => {
+  const base = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
+  return base ? `${base}/admin#orders?focus=${orderId}` : null;
+};
+
+function orderLines(order) {
+  return (Array.isArray(order.items) ? order.items : [])
+    .map((l) => `• ${esc(l.name)} × ${l.qty} — ${l.cost * l.qty} ₽`)
+    .join('\n');
+}
+
+function orderText(order, { company, user } = {}) {
+  const when = new Date().toLocaleString('ru-RU', {
+    timeZone: 'Europe/Chisinau', dateStyle: 'short', timeStyle: 'short'
+  });
+  return [
+    `<b>${KIND[order.kind] || 'Заказ'} #${order.id}</b>`,
+    company ? `Компания: ${esc(company.company_name || '—')}` : null,
+    user ? `Заказал: ${esc(user.user_name || '—')}` : null,
+    '',
+    orderLines(order),
+    '',
+    `Итого: <b>${order.total ?? 0} ₽</b>`,
+    order.comment ? `Комментарий: ${esc(order.comment)}` : null,
+    '',
+    STATUS[order.status] || order.status,
+    `<i>обновлено ${when}</i>`
+  ].filter((l) => l !== null).join('\n');
+}
+
+function orderMarkup(order) {
+  const url = orderUrl(order.id);
+  return url ? { inline_keyboard: [[{ text: '📋 Открыть в админ-панели', url }]] } : undefined;
+}
+
+async function orderContext(order) {
+  const [company, user] = await Promise.all([
+    order.company_id
+      ? supabase.from('companies').select('id, company_name').eq('id', order.company_id).maybeSingle()
+      : Promise.resolve({ data: null }),
+    order.user_id
+      ? supabase.from('users').select('id, user_name, chat_id').eq('id', order.user_id).maybeSingle()
+      : Promise.resolve({ data: null })
+  ]);
+  return { company: company.data, user: user.data };
+}
+
+export async function sendNewOrderNotice(order) {
+  const group = adminGroupId();
+  if (!group) {
+    console.warn('[notices] order notice skipped — TELEGRAM_ADMIN_GROUP_ID is not set');
+    return;
+  }
+
+  const ctx = await orderContext(order);
+  const res = await sendMessage(group, orderText(order, ctx), { reply_markup: orderMarkup(order) });
+
+  const messageId = res?.result?.message_id;
+  if (!messageId) return;
+
+  const { error } = await supabase
+    .from('orders').update({ notice_message_id: messageId }).eq('id', order.id);
+  if (error) console.error('[notices] could not store order message id:', error);
+}
+
+/* Called after an admin decides an order: rewrites the group post, then tells
+   the person who ordered and — if the setting is on — the company owner. */
+export async function announceOrderDecision(order) {
+  const ctx = await orderContext(order);
+
+  if (adminGroupId() && order.notice_message_id) {
+    await editMessageText(adminGroupId(), order.notice_message_id,
+      orderText(order, ctx), { reply_markup: orderMarkup(order) });
+  }
+
+  const word = order.status === 'confirmed' ? 'подтверждён' : 'отклонён';
+  const text = [
+    `<b>${KIND[order.kind] || 'Заказ'} #${order.id} ${word}</b>`,
+    '',
+    orderLines(order),
+    '',
+    `Итого: <b>${order.total ?? 0} ₽</b>`
+  ].join('\n');
+
+  const targets = new Set();
+  if (ctx.user?.chat_id) targets.add(String(ctx.user.chat_id));
+
+  if (await notifyOwnerEnabled()) {
+    const { data: owner } = await supabase
+      .from('users').select('chat_id')
+      .eq('company_id', order.company_id).eq('role', 'owner').maybeSingle();
+    // a Set keyed by chat id means the owner who placed the order is not
+    // messaged twice
+    if (owner?.chat_id) targets.add(String(owner.chat_id));
+  }
+
+  for (const chatId of targets) await sendMessage(chatId, text);
+}
+
+async function notifyOwnerEnabled() {
+  const { data } = await supabase
+    .from('app_settings').select('value').eq('key', 'notifications').maybeSingle();
+  // default on: the owner is the one accountable for the company's spend
+  return data?.value?.notify_owner !== false;
+}

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { authRouter } from './src/routes/auth.js';
 import { adminRouter } from './src/routes/admin.js';
+import { appRouter } from './src/routes/app.js';
 import { telegramRouter } from './src/routes/telegram.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -20,6 +21,7 @@ app.get('/healthz', (req, res) => res.json({ ok: true, ts: Date.now() }));
 
 app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
+app.use('/api/app', appRouter);
 app.use('/api/telegram', telegramRouter);
 
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));

@@ -6,12 +6,12 @@ for hosting, Telegram bot + mini-app on top (bot is a stub at this stage).
 ## Layout
 
 ```
-server.js              Express: static files + API + telegram webhook stub
-db/schema.sql          run this in the Supabase SQL editor
-src/lib/               supabase client, JWT cookie auth
-src/routes/            auth.js (admin + company login), admin.js (CRUD), telegram.js (stub)
-public/admin/          admin panel (3-block layout)
-public/app/            Telegram mini-app (code login + placeholder home)
+server.js              Express: static files + API + telegram webhook
+db/schema.sql          full schema; db/migrations/ for an existing database
+src/lib/               supabase, JWT cookie auth, telegram client, notices
+src/routes/            auth.js, admin.js, app.js (mini-app API), telegram.js
+public/admin/          admin panel (nav + content)
+public/app/            Telegram mini-app
 ```
 
 ## Admin panel
@@ -19,12 +19,11 @@ public/app/            Telegram mini-app (code login + placeholder home)
 Three blocks: left nav (300px) · main content · right accessibility panel (300px).
 
 - Nav: Заказы, Позиции, Пользователи, Настройки, Сообщения, Cron
-- Right panel has tabs. The **Вид** tab is global (theme light/dark/system,
-  compact toggles for both side panels); each page can add its own tabs — the
-  Пользователи page adds a **Таблица** tab.
+- Theme (light/dark) and the compact toggle sit at the bottom of the nav.
 - Preferences persist in `localStorage` and sync to `public.admin_prefs`.
-- Working today: **Пользователи** (create/edit/delete companies, generate access
-  codes, toggle access). Everything else is a placeholder.
+- Working today: **Заказы** (confirm/reject), **Позиции** (items, categories,
+  materials), **Пользователи** (users + companies), **Настройки**.
+  Сообщения and Cron are still placeholders.
 
 Login: **chat_id + access code** of a `public.users` row with `role = 'admin'`
 → signed httpOnly cookie (12h). Both must match the same row. Owner codes are
@@ -32,15 +31,37 @@ rejected here, admin codes are rejected by the mini-app.
 
 ## Company users
 
-Everyone — admins and companies alike — is a row in `public.users` with a code
-(no 0/O/1/I) and a role. The role decides which surface the code opens:
+Two separate credentials:
 
-- `owner` (default) — the companies, 6-char code, Telegram mini-app.
-- `admin` — panel operators, 10-char code, `/admin`.
+- **Admins** — `role = 'admin'`, personal `user_code` + their `chat_id`, log
+  into `/admin`. The first one comes from the bootstrap block in
+  `db/schema.sql`; the API refuses to delete or demote the last enabled admin,
+  or to save an admin without a `chat_id`.
+- **Company staff** — `role` is `owner` or `employee`, and they never type a
+  personal code. They open the mini-app inside Telegram, which proves who they
+  are, and join a company once with the **company** code.
 
-Admins are created in the panel like anyone else. The **first** one has to be
-inserted by `db/schema.sql` (see the bootstrap block) since the panel is what
-creates users. The API refuses to delete or demote the last enabled admin.
+A company code alone gets nobody in: the user must already exist (via `/start`)
+and have been approved by an admin. The first person to join a company becomes
+its `owner`; everyone after is an `employee`. One owner per company, enforced
+by a partial unique index.
+
+## Orders
+
+The mini-app has two modes over one catalog — **Заказ** and **Возврат** —
+which differ only by `orders.kind`. Customers see items and prices; materials
+and their costs are never sent to the client. Grouping by category follows the
+app setting.
+
+Baskets are priced **server-side**: the browser sends item ids and quantities
+only, and `orders.items` stores a priced snapshot so history stays truthful
+after the catalog changes.
+
+A new order posts to the admin group with a button into the panel. Confirming
+or rejecting it in **Заказы** rewrites that post in place and messages the
+person who ordered — plus the company owner, if
+**Настройки → Уведомления о заказах** is set to «Заказчика и владельца».
+Deciding an order twice is refused rather than re-notifying everyone.
 
 The mini-app exchanges the code for a 30-day cookie and stamps `last_login`.
 
