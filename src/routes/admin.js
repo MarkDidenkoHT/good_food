@@ -243,14 +243,18 @@ adminRouter.delete('/companies/:id', async (req, res) => {
 
 /* ---------- orders ---------- */
 
+/* The date range is the only server-side filter: status, type and company are
+   narrowed in the browser so those controls never wait on a request. */
 adminRouter.get('/orders', async (req, res) => {
-  const status = String(req.query.status || '').trim();
+  const { from, to } = req.query;
   let q = supabase
     .from('orders')
     .select('*, companies(company_name), users(user_name)')
     .order('created_at', { ascending: false })
-    .limit(200);
-  if (['new', 'confirmed', 'rejected'].includes(status)) q = q.eq('status', status);
+    .limit(1000);
+
+  if (from) q = q.gte('created_at', String(from));
+  if (to) q = q.lte('created_at', String(to));
 
   const { data, error } = await q;
   if (error) return dbError(res, error, 500);

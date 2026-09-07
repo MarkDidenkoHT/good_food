@@ -308,3 +308,18 @@ body.nav-compact .nav__list { padding: 10px 8px; }
 
 .pill--warn { background: #fff3cd; color: #8a6100; }
 [data-theme="dark"] .pill--warn { background: #3d3417; color: #ffd479; }
+
+
+/* ── filter toolbar ─────────────────────────────── */
+.toolbar { flex-wrap: wrap; gap: 8px; }
+.tool { display: flex; align-items: center; gap: 6px; }
+.tool__label {
+  font-size: 11px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .6px; color: var(--ink-3);
+}
+.input--sm {
+  width: auto; padding: 6px 10px; font-size: 13px; font-weight: 600;
+  border-radius: var(--r-sm);
+}
+select.input--sm { cursor: pointer; }
+input[type="date"].input--sm { min-width: 140px; }

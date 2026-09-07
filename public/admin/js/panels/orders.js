@@ -2,10 +2,23 @@ import { api } from '../api.js';
 import { h, esc, toast, confirmDialog, fmtDate } from '../ui.js';
 import { paintIcons } from '../icons.js';
 
+/* Only the date range costs a request. Status, type and company narrow the
+   rows already in memory, so those dropdowns react instantly. */
+
 let rows = [];
-let filter = 'new';       // new | confirmed | rejected | all
+let companies = [];
 let focusId = null;
 let root;
+
+const today = () => new Date().toISOString().slice(0, 10);
+
+const filters = {
+  from: today(),
+  to: today(),
+  status: 'new',
+  kind: 'all',
+  company: 'all'
+};
 
 const KIND = { order: 'Заказ', return: 'Возврат' };
 const STATUS = {
@@ -13,6 +26,10 @@ const STATUS = {
   confirmed: ['Подтверждён', 'pill--on'],
   rejected: ['Отклонён', 'pill--off']
 };
+
+/* Local midnight, not UTC: "today" has to mean the admin's today. */
+const dayStart = (d) => new Date(`${d}T00:00:00`).toISOString();
+const dayEnd = (d) => new Date(`${d}T23:59:59.999`).toISOString();
 
 export const ordersPanel = {
   id: 'orders',
@@ -28,39 +45,119 @@ export const ordersPanel = {
   async render(container, params = {}) {
     root = container;
     focusId = params.focus || null;
-    // a deep link should never land on a filter that hides its target
-    if (focusId) filter = 'all';
+
+    // A deep link from Telegram must land on its order whatever the filters
+    // would otherwise hide, so open it unfiltered.
+    if (focusId) {
+      filters.from = '';
+      filters.to = '';
+      filters.status = 'all';
+      filters.kind = 'all';
+      filters.company = 'all';
+    }
 
     root.append(h(`
       <div class="card">
-        <div class="card__head">
-          <div class="subtabs" id="ord-tabs" role="tablist"></div>
-        </div>
+        <div class="card__head toolbar" id="ord-toolbar"></div>
         <div id="ord-wrap"></div>
       </div>`));
 
     document.getElementById('ord-refresh')?.addEventListener('click', load);
+    drawToolbar();
     await load();
   }
 };
 
 async function load() {
   try {
-    const qs = filter === 'all' ? '' : `?status=${filter}`;
-    rows = await api.get(`/api/admin/orders${qs}`);
+    const qs = new URLSearchParams();
+    if (filters.from) qs.set('from', dayStart(filters.from));
+    if (filters.to) qs.set('to', dayEnd(filters.to));
+
+    const [orders, comps] = await Promise.all([
+      api.get(`/api/admin/orders${qs.toString() ? `?${qs}` : ''}`),
+      companies.length ? Promise.resolve(companies) : api.get('/api/admin/companies')
+    ]);
+    rows = orders;
+    companies = comps;
+    drawToolbar();
     draw();
   } catch (e) {
     toast(e.message, 'err');
   }
 }
 
+function drawToolbar() {
+  const bar = root?.querySelector('#ord-toolbar');
+  if (!bar) return;
+
+  bar.innerHTML = `
+    <label class="tool">
+      <span class="tool__label">С</span>
+      <input class="input input--sm" type="date" id="f-from" value="${filters.from}">
+    </label>
+    <label class="tool">
+      <span class="tool__label">По</span>
+      <input class="input input--sm" type="date" id="f-to" value="${filters.to}">
+    </label>
+    <button class="btn btn--sm" id="f-today">Сегодня</button>
+    <button class="btn btn--sm" id="f-all-time">Всё время</button>
+
+    <div style="flex:1 1 auto"></div>
+
+    <select class="input input--sm" id="f-status" title="Статус">
+      <option value="new"       ${filters.status === 'new' ? 'selected' : ''}>Новые</option>
+      <option value="confirmed" ${filters.status === 'confirmed' ? 'selected' : ''}>Подтверждённые</option>
+      <option value="rejected"  ${filters.status === 'rejected' ? 'selected' : ''}>Отклонённые</option>
+      <option value="all"       ${filters.status === 'all' ? 'selected' : ''}>Все статусы</option>
+    </select>
+
+    <select class="input input--sm" id="f-kind" title="Тип">
+      <option value="all"    ${filters.kind === 'all' ? 'selected' : ''}>Все типы</option>
+      <option value="order"  ${filters.kind === 'order' ? 'selected' : ''}>Заказы</option>
+      <option value="return" ${filters.kind === 'return' ? 'selected' : ''}>Возвраты</option>
+    </select>
+
+    <select class="input input--sm" id="f-company" title="Компания">
+      <option value="all" ${filters.company === 'all' ? 'selected' : ''}>Все компании</option>
+      ${companies.map((c) => `
+        <option value="${c.id}" ${String(filters.company) === String(c.id) ? 'selected' : ''}>
+          ${esc(c.company_name || `#${c.id}`)}
+        </option>`).join('')}
+    </select>`;
+
+  // dates need a round trip; the rest filter what is already loaded
+  bar.querySelector('#f-from').onchange = (e) => { filters.from = e.target.value; load(); };
+  bar.querySelector('#f-to').onchange = (e) => { filters.to = e.target.value; load(); };
+  bar.querySelector('#f-today').onclick = () => {
+    filters.from = filters.to = today();
+    load();
+  };
+  bar.querySelector('#f-all-time').onclick = () => {
+    filters.from = filters.to = '';
+    load();
+  };
+  bar.querySelector('#f-status').onchange = (e) => { filters.status = e.target.value; draw(); };
+  bar.querySelector('#f-kind').onchange = (e) => { filters.kind = e.target.value; draw(); };
+  bar.querySelector('#f-company').onchange = (e) => { filters.company = e.target.value; draw(); };
+}
+
+function visible() {
+  return rows.filter((o) =>
+    (filters.status === 'all' || o.status === filters.status) &&
+    (filters.kind === 'all' || o.kind === filters.kind) &&
+    (filters.company === 'all' || String(o.company_id) === String(filters.company)));
+}
+
 function draw() {
-  drawTabs();
   const wrap = root?.querySelector('#ord-wrap');
   if (!wrap) return;
 
-  if (!rows.length) {
-    wrap.innerHTML = `<div class="card__body" style="color:var(--ink-3)">Заказов нет.</div>`;
+  const list = visible();
+  if (!list.length) {
+    wrap.innerHTML = `<div class="card__body" style="color:var(--ink-3)">
+      ${rows.length ? 'Под фильтры ничего не подходит.' : 'За выбранный период заказов нет.'}
+    </div>`;
     return;
   }
 
@@ -73,7 +170,7 @@ function draw() {
         <th style="width:130px">Статус</th><th style="width:150px">Создан</th>
         <th style="width:130px"></th>
       </tr></thead>
-      <tbody>${rows.map(rowHTML).join('')}</tbody>
+      <tbody>${list.map(rowHTML).join('')}</tbody>
     </table>`;
 
   wrap.querySelectorAll('[data-decide]').forEach((b) => {
@@ -82,19 +179,6 @@ function draw() {
 
   paintIcons(wrap);
   applyFocus();
-}
-
-function drawTabs() {
-  const bar = root?.querySelector('#ord-tabs');
-  if (!bar) return;
-  const defs = [['new', 'Новые'], ['confirmed', 'Подтверждённые'],
-                ['rejected', 'Отклонённые'], ['all', 'Все']];
-  bar.innerHTML = '';
-  defs.forEach(([id, label]) => {
-    const b = h(`<button class="subtab" role="tab" aria-selected="${id === filter}">${esc(label)}</button>`);
-    b.onclick = () => { filter = id; load(); };
-    bar.append(b);
-  });
 }
 
 function rowHTML(o) {
