@@ -81,7 +81,7 @@ async function isLastAdmin(id) {
 function pickUser(b = {}) {
   const out = {};
   if ('user_name' in b) out.user_name = b.user_name?.trim() || null;
-  if ('user_code' in b) out.user_code = b.user_code?.trim().toUpperCase() || null;
+  if ('user_code' in b) out.user_code = b.user_code?.trim() || null;
   if ('access' in b) out.access = !!b.access;
   if ('role' in b) out.role = b.role === 'admin' ? 'admin' : 'owner';
   return out;

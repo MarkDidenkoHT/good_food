@@ -158,7 +158,7 @@ function openForm(user) {
       <div class="field">
         <label class="field__label" for="f-code">Код доступа</label>
         <div style="display:flex;gap:8px">
-          <input class="input input--code" id="f-code" name="user_code" maxlength="12"
+          <input class="input input--code" id="f-code" name="user_code" maxlength="32"
                  placeholder="AUTO" value="${esc(user?.user_code || '')}">
           <button type="button" class="btn" id="f-gen">Сгенерировать</button>
         </div>

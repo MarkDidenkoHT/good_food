@@ -60,7 +60,7 @@
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: document.getElementById('code').value.trim().toUpperCase() })
+        body: JSON.stringify({ code: document.getElementById('code').value.trim() })
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { err.textContent = data.error === 'Access disabled' ? 'Доступ закрыт' : 'Неверный код'; return; }

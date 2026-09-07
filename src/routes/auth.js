@@ -9,11 +9,17 @@ export const authRouter = Router();
    Neither login accepts the other's role, so a leaked owner code can never
    reach the panel. */
 
+/* Codes are matched case-insensitively: they get read off paper and typed on
+   phones, and rows inserted by hand won't follow the panel's casing.
+   ilike treats % and _ as wildcards, so codes are restricted up front to
+   characters that mean nothing to it rather than escaped after the fact. */
+const CODE_RE = /^[A-Za-z0-9_-]{1,32}$/;
+
 async function findByCode(code) {
   return supabase
     .from('users')
     .select('id, user_name, user_code, access, role')
-    .eq('user_code', code)
+    .ilike('user_code', code)
     .maybeSingle();
 }
 
@@ -24,8 +30,9 @@ function stampLogin(id) {
 /* ---------- admin panel ---------- */
 
 authRouter.post('/admin/login', async (req, res) => {
-  const code = String(req.body?.code || '').trim().toUpperCase();
+  const code = String(req.body?.code || '').trim();
   if (!code) return res.status(400).json({ error: 'Code required' });
+  if (!CODE_RE.test(code)) return res.status(401).json({ error: 'Invalid code' });
 
   const { data, error } = await findByCode(code);
   if (error) return dbError(res, error, 500);
@@ -57,8 +64,9 @@ authRouter.get('/admin/me', requireAdmin, (req, res) => {
 /* ---------- company users (mini-app) ---------- */
 
 authRouter.post('/user/login', async (req, res) => {
-  const code = String(req.body?.code || '').trim().toUpperCase();
+  const code = String(req.body?.code || '').trim();
   if (!code) return res.status(400).json({ error: 'Code required' });
+  if (!CODE_RE.test(code)) return res.status(401).json({ error: 'Unknown code' });
 
   const { data, error } = await findByCode(code);
   if (error) return dbError(res, error, 500);
