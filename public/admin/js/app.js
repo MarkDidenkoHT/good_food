@@ -48,7 +48,7 @@ function showLogin() {
       });
       showShell();
     } catch (ex) {
-      err.textContent = ex instanceof Unauthorized ? 'Неверный Chat ID или код' : ex.message;
+      err.textContent = ex instanceof Unauthorized ? 'Неверный логин или пароль' : ex.message;
       err.hidden = false;
     }
   };

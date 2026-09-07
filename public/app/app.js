@@ -21,7 +21,10 @@ let me = null;
 let catalog = { items: [], categories: [], group_by_category: false };
 let kind = 'order';                 // order | return
 let screen = 'catalog';             // catalog | history
-const cart = new Map();             // itemId -> qty
+/* An order and a return are separate documents, so they get separate
+   baskets: adding to one never touches the other. */
+const carts = { order: new Map(), return: new Map() };
+const cart = () => carts[kind];
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) =>
@@ -83,12 +86,12 @@ async function start() {
 
 /* Browser login: chat id + company code. */
 function renderLogin() {
-  centered('Вход', 'Введите ваш Chat ID и код компании.', `
+  centered('Вход', 'Введите логин и пароль, выданные менеджером.', `
     <form id="login" style="text-align:left">
       <input id="chat" inputmode="numeric" maxlength="20" autocomplete="off"
-             spellcheck="false" placeholder="Chat ID" required>
+             spellcheck="false" placeholder="Логин" required>
       <input class="code-input" id="code" maxlength="32" autocomplete="one-time-code"
-             autocapitalize="off" spellcheck="false" placeholder="КОД" required
+             autocapitalize="off" spellcheck="false" placeholder="Пароль" required
              style="margin-top:10px">
       <button class="btn" type="submit" style="margin-top:12px">Войти</button>
       <div class="err" id="err"></div>
@@ -113,10 +116,10 @@ function centered(title, text, extraHTML = '') {
 
 /* Known user inside Telegram who has not joined a company yet. */
 function renderJoin() {
-  centered('Код компании', 'Введите код, выданный менеджером.', `
+  centered('Пароль компании', 'Введите пароль, выданный менеджером.', `
     <form id="join">
       <input class="code-input" id="code" maxlength="32" autocomplete="one-time-code"
-             autocapitalize="off" spellcheck="false" placeholder="КОД" required>
+             autocapitalize="off" spellcheck="false" placeholder="Пароль" required>
       <button class="btn" type="submit" style="margin-top:12px">Продолжить</button>
       <div class="err" id="err"></div>
     </form>`);
@@ -142,7 +145,7 @@ async function submitJoin(code) {
     status === 404 ? 'Сначала нажмите /start в боте'
     : data.error === 'pending' ? 'Доступ ещё не открыт менеджером'
     : data.error === 'company_blocked' ? 'Доступ компании закрыт'
-    : data.error || 'Неверный код';
+    : data.error || 'Неверный логин или пароль';
 
   if (err) err.textContent = message;
   else toast(message, 'err');
@@ -162,34 +165,49 @@ async function openApp() {
 function render() {
   view.innerHTML = `
     <div class="head">
-      <div class="head__row">
-        <div class="head__name">${esc(me.company_name || 'Компания')}</div>
-        <div class="head__who">${esc(me.user_name || '')}</div>
-      </div>
-      <div class="tabs">
-        <button class="tab" data-screen="catalog" data-kind="order"
-                aria-selected="${screen === 'catalog' && kind === 'order'}">Заказ</button>
-        <button class="tab" data-screen="catalog" data-kind="return"
-                aria-selected="${screen === 'catalog' && kind === 'return'}">Возврат</button>
-        <button class="tab" data-screen="history"
-                aria-selected="${screen === 'history'}">История</button>
+      <div class="wrap">
+        <div class="head__row">
+          <div class="head__name">${esc(me.company_name || 'Компания')}</div>
+          <div class="head__who">${esc(me.user_name || '')}</div>
+        </div>
+        <div class="tabs">
+          <button class="tab" data-screen="catalog" data-kind="order"
+                  aria-selected="${screen === 'catalog' && kind === 'order'}">
+            Заказ<span class="tab__count" data-count="order"></span>
+          </button>
+          <button class="tab" data-screen="catalog" data-kind="return"
+                  aria-selected="${screen === 'catalog' && kind === 'return'}">
+            Возврат<span class="tab__count" data-count="return"></span>
+          </button>
+          <button class="tab" data-screen="history"
+                  aria-selected="${screen === 'history'}">История</button>
+        </div>
       </div>
     </div>
-    <div id="body"></div>`;
+    <div class="wrap" id="body"></div>`;
 
   view.querySelectorAll('.tab').forEach((b) => {
     b.onclick = () => {
-      const next = b.dataset.screen;
-      // switching between order and return keeps the basket: the same goods
-      // are usually involved, only the intent changes
       if (b.dataset.kind) kind = b.dataset.kind;
-      screen = next;
+      screen = b.dataset.screen;
       render();
     };
   });
 
+  paintTabCounts();
+
   if (screen === 'history') return renderHistory();
   renderCatalog();
+}
+
+/* Each tab shows how much is waiting in its own basket — the clearest way to
+   say the two are not one list. */
+function paintTabCounts() {
+  document.querySelectorAll('.tab__count').forEach((el) => {
+    const units = [...carts[el.dataset.count].values()].reduce((a, n) => a + n, 0);
+    el.textContent = units || '';
+    el.hidden = !units;
+  });
 }
 
 function renderCatalog() {
@@ -214,10 +232,10 @@ function renderCatalog() {
     }
     for (const [name, list] of [...groups].sort((a, b) => a[0].localeCompare(b[0], 'ru'))) {
       html += `<div class="group__title">${esc(name)}</div>`;
-      html += list.map(itemHTML).join('');
+      html += `<div class="list">${list.map(itemHTML).join('')}</div>`;
     }
   } else {
-    html = items.map(itemHTML).join('');
+    html = `<div class="list">${items.map(itemHTML).join('')}</div>`;
   }
 
   body.innerHTML = html;
@@ -231,9 +249,9 @@ function renderCatalog() {
 }
 
 function itemHTML(it) {
-  const qty = cart.get(it.id) || 0;
+  const qty = cart().get(it.id) || 0;
   return `
-    <div class="item">
+    <div class="item ${qty ? 'item--picked' : ''}">
       <div class="item__body">
         <div class="item__name">${esc(it.item_name)}</div>
         <div class="item__cost">${it.item_cost ?? 0} ₽</div>
@@ -247,17 +265,19 @@ function itemHTML(it) {
 }
 
 function bump(id, delta) {
-  const next = (cart.get(id) || 0) + delta;
-  if (next <= 0) cart.delete(id);
-  else cart.set(id, Math.min(999, next));
+  const basket = cart();
+  const next = (basket.get(id) || 0) + delta;
+  if (next <= 0) basket.delete(id);
+  else basket.set(id, Math.min(999, next));
   renderCatalog();
+  paintTabCounts();
 }
 
 function renderCart() {
   document.getElementById('cart')?.remove();
-  if (!cart.size) return;
+  if (!cart().size) return;
 
-  const lines = [...cart.entries()].map(([id, qty]) => {
+  const lines = [...cart().entries()].map(([id, qty]) => {
     const it = catalog.items.find((x) => x.id === id);
     return { id, qty, cost: it?.item_cost ?? 0, name: it?.item_name || '' };
   });
@@ -268,16 +288,18 @@ function renderCart() {
   bar.className = 'cart';
   bar.id = 'cart';
   bar.innerHTML = `
+    <div class="wrap">
     <div class="cart__row">
       <div class="cart__sum">${total} ₽ <span class="cart__count">· ${units} шт.</span></div>
       <button class="btn btn--ghost" id="cart-clear" style="width:auto;padding:8px 14px">Очистить</button>
     </div>
     <button class="btn" id="cart-send">
       ${kind === 'return' ? 'Оформить возврат' : 'Оформить заказ'}
-    </button>`;
+    </button>
+    </div>`;
   document.body.append(bar);
 
-  document.getElementById('cart-clear').onclick = () => { cart.clear(); renderCatalog(); };
+  document.getElementById('cart-clear').onclick = () => { cart().clear(); renderCatalog(); paintTabCounts(); };
   document.getElementById('cart-send').onclick = submit;
 }
 
@@ -285,13 +307,13 @@ async function submit() {
   const btn = document.getElementById('cart-send');
   btn.disabled = true;
 
-  const items = [...cart.entries()].map(([id, qty]) => ({ id, qty }));
+  const items = [...cart().entries()].map(([id, qty]) => ({ id, qty }));
   const { ok, data } = await post('/api/app/orders', { kind, items });
 
   btn.disabled = false;
   if (!ok) return toast(data.error || 'Не удалось отправить', 'err');
 
-  cart.clear();
+  cart().clear();
   toast(kind === 'return' ? `Возврат #${data.id} отправлен` : `Заказ #${data.id} отправлен`);
   screen = 'history';
   render();

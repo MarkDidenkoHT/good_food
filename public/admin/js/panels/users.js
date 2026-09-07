@@ -32,7 +32,7 @@ export const usersPanel = {
           <div class="subtabs" id="usr-tabs" role="tablist"></div>
           <div style="flex:1 1 auto"></div>
           <div style="position:relative;width:260px">
-            <input class="input" id="users-search" placeholder="Поиск по имени или chat id" style="padding-left:34px">
+            <input class="input" id="users-search" placeholder="Поиск по имени или логину" style="padding-left:34px">
             <span data-icon="search" style="position:absolute;left:10px;top:9px;width:18px;height:18px;color:var(--ink-3)"></span>
           </div>
         </div>
@@ -85,7 +85,7 @@ function draw() {
   wrap.innerHTML = `
     <table class="table">
       <thead><tr>
-        <th style="width:60px">ID</th><th>Компания</th><th style="width:130px">Chat ID</th>
+        <th style="width:60px">ID</th><th>Компания</th><th style="width:130px">Логин</th>
         <th style="width:170px">Компания</th>
         <th style="width:110px">Роль</th>
         <th style="width:110px">Доступ</th><th style="width:150px">Последний вход</th>
@@ -108,7 +108,7 @@ function draw() {
     };
   });
   wrap.querySelectorAll('[data-copy]').forEach((b) => {
-    b.onclick = () => { navigator.clipboard?.writeText(b.dataset.copy); toast('Код скопирован'); };
+    b.onclick = () => { navigator.clipboard?.writeText(b.dataset.copy); toast('Пароль скопирован'); };
   });
 
   import('../icons.js').then((m) => m.paintIcons(wrap));
@@ -173,11 +173,11 @@ function openForm(user) {
         <input class="input" id="f-name" name="user_name" required value="${esc(user?.user_name || '')}">
       </div>
       <div class="field">
-        <label class="field__label" for="f-chat">Chat ID</label>
+        <label class="field__label" for="f-chat">Логин</label>
         <input class="input input--code" id="f-chat" name="chat_id" inputmode="numeric"
                maxlength="20" placeholder="312756470" value="${esc(user?.chat_id ?? '')}">
         <p class="hint">Заполняется автоматически, когда пользователь нажимает /start в боте.
-           Администратору нужен для входа в панель.</p>
+           Вместе с паролем компании используется для входа.</p>
       </div>
       <div class="field">
         <label class="field__label" for="f-role">Роль</label>
@@ -253,7 +253,7 @@ function drawCompanies(wrap) {
   wrap.innerHTML = `
     <table class="table">
       <thead><tr>
-        <th style="width:60px">ID</th><th>Компания</th><th style="width:150px">Код</th>
+        <th style="width:60px">ID</th><th>Компания</th><th style="width:150px">Пароль</th>
         <th style="width:120px">Сотрудников</th><th style="width:160px">Владелец</th>
         <th style="width:110px">Доступ</th><th style="width:110px"></th>
       </tr></thead>
@@ -292,7 +292,7 @@ function drawCompanies(wrap) {
     };
   });
   wrap.querySelectorAll('[data-copy]').forEach((b) => {
-    b.onclick = () => { navigator.clipboard?.writeText(b.dataset.copy); toast('Код скопирован'); };
+    b.onclick = () => { navigator.clipboard?.writeText(b.dataset.copy); toast('Пароль скопирован'); };
   });
 
   import('../icons.js').then((m) => m.paintIcons(wrap));
@@ -309,13 +309,13 @@ function companyForm(company) {
         <input class="input" id="c-name" name="company_name" required value="${esc(company?.company_name || '')}">
       </div>
       <div class="field">
-        <label class="field__label" for="c-code">Код компании</label>
+        <label class="field__label" for="c-code">Пароль компании</label>
         <div style="display:flex;gap:8px">
           <input class="input input--code" id="c-code" name="company_code" maxlength="32"
                  placeholder="AUTO" value="${esc(company?.company_code || '')}">
           <button type="button" class="btn" id="c-gen">Сгенерировать</button>
         </div>
-        <p class="hint">Этот код сотрудники вводят в мини-приложении, чтобы присоединиться к компании.</p>
+        <p class="hint">Сотрудники вводят этот пароль вместе со своим логином при входе.</p>
       </div>
       <div class="field" style="margin-bottom:0">
         <label class="switch">
