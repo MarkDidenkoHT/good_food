@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { supabase } from '../lib/supabase.js';
-import { notifyAdmins, sendMessage, esc } from '../lib/telegram.js';
+import { sendMessage, esc } from '../lib/telegram.js';
+import { sendNewUserNotice } from '../lib/notices.js';
 
 export const telegramRouter = Router();
 
@@ -28,11 +29,26 @@ async function handleUpdate(update) {
   const msg = update.message || update.edited_message;
   if (!msg?.text) return;
 
-  // Only private chats register users; group messages are ignored.
-  if (msg.chat?.type !== 'private') return;
-
+  const chat = msg.chat || {};
   const text = msg.text.trim();
-  if (text === '/start' || text.startsWith('/start ')) await onStart(msg);
+  const cmd = text.split(/[\s@]/)[0];
+
+  // Every chat the bot is in shows up here, so this is how you read a group
+  // id off the Render logs. getUpdates cannot be used once a webhook is set.
+  console.log(`[telegram] ${chat.type} chat_id=${chat.id} text=${text.slice(0, 40)}`);
+
+  // /id works anywhere — the way to get a group id without getUpdates.
+  // Group privacy mode hides normal messages from bots but never commands.
+  if (cmd === '/id') {
+    await sendMessage(chat.id,
+      `chat_id: <code>${chat.id}</code>\nтип: ${chat.type}`);
+    return;
+  }
+
+  // Only private chats register users.
+  if (chat.type !== 'private') return;
+
+  if (cmd === '/start') await onStart(msg);
 }
 
 async function onStart(msg) {
@@ -61,7 +77,13 @@ async function onStart(msg) {
   // New arrival: no code, no access. An admin grants both from the panel.
   const { data: created, error } = await supabase
     .from('users')
-    .insert({ user_name: displayName, chat_id: chatId, access: false, role: 'owner' })
+    .insert({
+      user_name: displayName,
+      chat_id: chatId,
+      tg_username: from.username || null,
+      access: false,
+      role: 'owner'
+    })
     .select().single();
 
   if (error) {
@@ -72,12 +94,5 @@ async function onStart(msg) {
   await sendMessage(chatId,
     'Здравствуйте! Заявка принята. Доступ откроет менеджер — вы получите сообщение, когда всё будет готово.');
 
-  await notifyAdmins(
-    '<b>Новый пользователь</b>\n' +
-    `Имя: ${esc(displayName)}\n` +
-    (from.username ? `Username: @${esc(from.username)}\n` : '') +
-    `chat_id: <code>${chatId}</code>\n` +
-    `ID в базе: ${created.id}\n\n` +
-    'Доступ закрыт. Откройте его и назначьте код в админ-панели.'
-  );
+  await sendNewUserNotice(created, from.username);
 }

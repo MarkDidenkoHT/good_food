@@ -4,6 +4,7 @@ import { h, esc, toast, modal, confirmDialog, fmtDate } from '../ui.js';
 let rows = [];
 let query = '';
 let showDisabled = true;
+let focusId = null;
 let root;
 
 export const usersPanel = {
@@ -18,8 +19,9 @@ export const usersPanel = {
     h(`<button class="btn btn--primary" id="users-add"><span data-icon="plus"></span>Добавить</button>`)
   ],
 
-  async render(container) {
+  async render(container, params = {}) {
     root = container;
+    focusId = params.focus || null;
     root.append(h(`
       <div class="card">
         <div class="card__head">
@@ -99,11 +101,37 @@ function draw() {
   });
 
   import('../icons.js').then((m) => m.paintIcons(wrap));
+  applyFocus();
+}
+
+/* Arriving from the Telegram button: scroll the user into view and flash the
+   row once. Consumed on first use so a redraw does not keep re-flashing. */
+function applyFocus() {
+  if (!focusId) return;
+  const row = root?.querySelector(`#user-row-${CSS.escape(focusId)}`);
+
+  // The user may be filtered out of the current view — say so rather than
+  // silently doing nothing.
+  if (!row) {
+    if (rows.some((r) => String(r.id) === String(focusId))) {
+      toast('Пользователь скрыт текущим фильтром', 'err');
+    } else {
+      toast('Пользователь не найден', 'err');
+    }
+    focusId = null;
+    return;
+  }
+
+  focusId = null;
+  row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  row.classList.remove('row-flash');
+  void row.offsetWidth;            // restart the animation if it is already on
+  row.classList.add('row-flash');
 }
 
 function rowHTML(u) {
   return `
-    <tr>
+    <tr id="user-row-${u.id}">
       <td class="num">${u.id}</td>
       <td style="font-weight:700">${esc(u.user_name || '—')}</td>
       <td><span class="code-cell" data-copy="${esc(u.user_code || '')}" style="cursor:pointer" title="Скопировать">${esc(u.user_code || '—')}</span></td>

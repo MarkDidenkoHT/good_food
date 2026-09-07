@@ -291,3 +291,14 @@ body.nav-compact .nav__list { padding: 10px 8px; }
 .seg button [data-icon] { display: inline-grid; place-items: center; flex: 0 0 auto; }
 .seg button [data-icon] svg { width: 15px; height: 15px; display: block; }
 .seg button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+
+
+/* ── deep-link highlight ────────────────────────────────────────── */
+@keyframes row-flash {
+  0%, 40% { background: var(--brand-soft); box-shadow: inset 3px 0 0 var(--brand); }
+  100%    { background: transparent; box-shadow: inset 3px 0 0 transparent; }
+}
+.row-flash > td { animation: row-flash 2.4s ease-out 1; }
+@media (prefers-reduced-motion: reduce) {
+  .row-flash > td { animation: none; background: var(--brand-soft); }
+}

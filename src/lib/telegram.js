@@ -24,7 +24,10 @@ async function call(method, payload) {
       body: JSON.stringify(payload)
     });
     const data = await res.json();
-    if (!data.ok) console.error(`[telegram] ${method} failed:`, data.description);
+    if (!data.ok) {
+      console.error(`[telegram] ${method} failed:`, data.description,
+        '| payload:', JSON.stringify(payload).slice(0, 200));
+    }
     return data;
   } catch (err) {
     // Telegram being unreachable must never fail the request that triggered
@@ -38,6 +41,18 @@ export function sendMessage(chatId, text, extra = {}) {
   if (!chatId) return Promise.resolve(null);
   return call('sendMessage', {
     chat_id: chatId,
+    text,
+    parse_mode: 'HTML',
+    disable_web_page_preview: true,
+    ...extra
+  });
+}
+
+export function editMessageText(chatId, messageId, text, extra = {}) {
+  if (!chatId || !messageId) return Promise.resolve(null);
+  return call('editMessageText', {
+    chat_id: chatId,
+    message_id: messageId,
     text,
     parse_mode: 'HTML',
     disable_web_page_preview: true,

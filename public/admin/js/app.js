@@ -62,8 +62,8 @@ async function showShell() {
   wireChrome();
   await prefsMod.loadRemote();
 
-  const fromHash = panels.find((p) => p.id === location.hash.slice(1));
-  navigate(fromHash || usersPanel);
+  const { panel, params } = parseHash();
+  navigate(panel || usersPanel, params);
 }
 
 function buildNav() {
@@ -95,14 +95,30 @@ function wireChrome() {
   };
 
   window.addEventListener('hashchange', () => {
-    const p = panels.find((x) => x.id === location.hash.slice(1));
-    if (p && p !== current) navigate(p);
+    const { panel, params } = parseHash();
+    // re-navigate on a params-only change too: the same panel with a new
+    // focus target still has work to do
+    if (panel && (panel !== current || Object.keys(params).length)) navigate(panel, params);
   });
 }
 
-async function navigate(panel) {
+/* "#users?focus=4" -> { panel: usersPanel, params: { focus: '4' } } */
+function parseHash() {
+  const raw = location.hash.slice(1);
+  const [id, qs = ''] = raw.split('?');
+  return {
+    panel: panels.find((p) => p.id === id) || null,
+    params: Object.fromEntries(new URLSearchParams(qs))
+  };
+}
+
+async function navigate(panel, params = {}) {
   current = panel;
-  location.hash = panel.id;
+
+  const qs = new URLSearchParams(params).toString();
+  const want = qs ? `${panel.id}?${qs}` : panel.id;
+  // assigning an identical hash is a no-op, so this cannot loop
+  if (location.hash.slice(1) !== want) location.hash = want;
 
   document.querySelectorAll('.nav__link').forEach((b) => {
     if (b.dataset.panel === panel.id) b.setAttribute('aria-current', 'page');
@@ -120,7 +136,7 @@ async function navigate(panel) {
   const content = $('#content');
   content.innerHTML = '';
   try {
-    await panel.render(content);
+    await panel.render(content, params);
   } catch (e) {
     if (e instanceof Unauthorized) return showLogin();
     toast(e.message, 'err');

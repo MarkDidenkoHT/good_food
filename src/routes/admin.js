@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { supabase, dbError } from '../lib/supabase.js';
 import { requireAdmin } from '../lib/auth.js';
+import { refreshUserNotice } from '../lib/notices.js';
 
 export const adminRouter = Router();
 adminRouter.use(requireAdmin);
@@ -40,6 +41,9 @@ adminRouter.patch('/users/:id', async (req, res) => {
   const { data, error } = await supabase
     .from('users').update(patch).eq('id', req.params.id).select().single();
   if (error) return dbError(res, error);
+
+  // the group post is the operators' worklist — keep it current
+  refreshUserNotice(data).catch((e) => console.error('[notices]', e));
   res.json(data);
 });
 
@@ -47,8 +51,13 @@ adminRouter.delete('/users/:id', async (req, res) => {
   if (await isLastAdmin(req.params.id)) {
     return res.status(409).json({ error: 'Нельзя удалить последнего администратора' });
   }
+  const { data: gone } = await supabase
+    .from('users').select('*').eq('id', req.params.id).maybeSingle();
+
   const { error } = await supabase.from('users').delete().eq('id', req.params.id);
   if (error) return dbError(res, error);
+
+  if (gone) refreshUserNotice(gone, { deleted: true }).catch((e) => console.error('[notices]', e));
   res.json({ ok: true });
 });
 
