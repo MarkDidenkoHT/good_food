@@ -9,6 +9,7 @@ const stub = (id, label, icon, subtitle, text, asideNote) => ({
   asideTabs: [{
     id: `${id}-opts`,
     label: 'Опции',
+    icon,
     render: () => placeholder('Скоро', asideNote)
   }]
 });

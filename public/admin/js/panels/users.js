@@ -47,6 +47,7 @@ export const usersPanel = {
   asideTabs: [{
     id: 'users-view',
     label: 'Таблица',
+    icon: 'users',
     render() {
       const el = h(`
         <div>

@@ -54,6 +54,7 @@ export const itemsPanel = {
   asideTabs: [{
     id: 'items-summary',
     label: 'Сводка',
+    icon: 'items',
     render() {
       const noCat = items.filter((i) => !i.item_category).length;
       return h(`

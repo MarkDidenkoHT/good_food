@@ -99,22 +99,40 @@ body.nav-compact .nav__list { padding: 10px 8px; }
 }
 .aside__tabs { display: flex; gap: 4px; flex: 1 1 auto; overflow: hidden; }
 .aside__tab {
+  display: flex; align-items: center; gap: 8px;
   border: 0; background: none; cursor: pointer;
   padding: 6px 12px; border-radius: var(--r-pill);
   font-weight: 700; font-size: 13px; color: var(--ink-3); white-space: nowrap;
 }
 .aside__tab:hover { background: var(--surface-2); color: var(--ink); }
-.aside__tab[aria-selected="true"] { background: var(--brand-soft); color: var(--brand); }
+.aside__tab[aria-selected="true"] { background: var(--brand); color: #fff; }
+.aside__icon { flex: 0 0 18px; width: 18px; height: 18px; display: grid; place-items: center; }
+.aside__icon svg { width: 18px; height: 18px; }
 .aside__body { flex: 1 1 auto; overflow-y: auto; padding: 16px 14px; }
 
-body.aside-compact .aside__tabs,
-body.aside-compact .aside__body { display: none; }
-body.aside-compact .aside__head { justify-content: center; padding: 0; }
+/* Rows in the panel body: same shape as a nav link, so they collapse the
+   same way — icon + label full width, icon only when compact. */
+.aside-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px; border-radius: var(--r-md);
+  color: var(--ink-2); font-weight: 600; white-space: nowrap;
+  cursor: pointer; border: 0; background: none; width: 100%; text-align: left;
+  transition: background var(--speed), color var(--speed);
+}
+.aside-row + .aside-row { margin-top: 2px; }
+.aside-row:hover { background: var(--surface-2); color: var(--ink); }
+.aside-row__icon { flex: 0 0 20px; width: 20px; height: 20px; display: grid; place-items: center; }
+.aside-row__icon svg { width: 20px; height: 20px; }
+.aside-row__label { flex: 1 1 auto; }
 
-/* Collapsed, the panel is nothing but this button — it is the only way back
-   to the full panel, so it must never be the one thing that disappears. */
-#aside-expand { display: none; flex: 0 0 auto; }
-body.aside-compact #aside-expand { display: inline-flex; }
+/* Compact: labels go, icons stay, everything centres — mirror of the nav. */
+body.aside-compact .aside__label,
+body.aside-compact .aside-row__label { display: none; }
+body.aside-compact .aside__head { justify-content: center; padding: 0; }
+body.aside-compact .aside__tabs { flex: 0 0 auto; justify-content: center; }
+body.aside-compact .aside__tab { padding: 8px; }
+body.aside-compact .aside__body { padding: 10px 8px; }
+body.aside-compact .aside-row { justify-content: center; padding: 10px 0; }
 
 .field { margin-bottom: 18px; }
 .field__label {
@@ -257,9 +275,12 @@ body.aside-compact #aside-expand { display: inline-flex; }
   body.nav-compact .shell,
   body.aside-compact .shell { grid-template-columns: var(--nav-w-compact) minmax(0,1fr) var(--aside-w-compact); }
   .shell .nav__name, .shell .nav__label { display: none; }
-  .aside__tabs, .aside__body { display: none; }
+  .shell .aside__label, .shell .aside-row__label { display: none; }
   .aside__head { justify-content: center; padding: 0; }
-  #aside-expand { display: inline-flex; }
+  .aside__tabs { flex: 0 0 auto; justify-content: center; }
+  .aside__tab { padding: 8px; }
+  .aside__body { padding: 10px 8px; }
+  .aside-row { justify-content: center; padding: 10px 0; }
 }
 
 

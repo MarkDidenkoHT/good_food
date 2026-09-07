@@ -31,6 +31,7 @@ export const settingsPanel = {
   asideTabs: [{
     id: 'settings-help',
     label: 'Справка',
+    icon: 'settings',
     render: () => h(`
       <div>
         <div class="field" style="margin-bottom:0">

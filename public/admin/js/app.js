@@ -81,11 +81,7 @@ function buildNav() {
 }
 
 function wireChrome() {
-  // Visibility of the expand button is CSS's job (body.aside-compact), so
-  // the narrow-viewport breakpoint gets it for free.
-  const toggleCompact = () => { prefsMod.set({ compact: !prefs.compact }); buildAside(); };
-  $('#nav-toggle').onclick = toggleCompact;
-  $('#aside-expand').onclick = toggleCompact;
+  $('#nav-toggle').onclick = () => { prefsMod.set({ compact: !prefs.compact }); buildAside(); };
 
   $('#logout-btn').onclick = async () => {
     await api.post('/api/auth/admin/logout');
@@ -136,7 +132,11 @@ function buildAside() {
   const bar = $('#aside-tabs');
   bar.innerHTML = '';
   tabs.forEach((t) => {
-    const b = h(`<button class="aside__tab" role="tab" aria-selected="${t.id === asideTab}">${esc(t.label)}</button>`);
+    const b = h(`
+      <button class="aside__tab" role="tab" aria-selected="${t.id === asideTab}" title="${esc(t.label)}">
+        <span class="aside__icon">${icon(t.icon || 'sliders')}</span>
+        <span class="aside__label">${esc(t.label)}</span>
+      </button>`);
     b.onclick = () => { asideTab = t.id; buildAside(); };
     bar.append(b);
   });
@@ -147,41 +147,36 @@ function buildAside() {
   paintIcons(body);
 }
 
-/* Global tab — present on every panel. */
+/* Global tab — present on every panel. Two toggles, each shaped like a nav
+   link so the panel collapses to icons the same way the nav does. */
 const visualTab = {
   id: 'visual',
   label: 'Вид',
+  icon: 'sliders',
   render() {
+    const dark = prefs.theme === 'dark';
     const el = h(`
       <div>
-        <div class="field">
-          <span class="field__label">Тема</span>
-          <div class="seg" id="seg-theme">
-            <button data-v="light" aria-pressed="${prefs.theme === 'light'}">Светлая</button>
-            <button data-v="dark"  aria-pressed="${prefs.theme === 'dark'}">Тёмная</button>
-          </div>
-        </div>
-
-        <div class="field" style="margin-bottom:0">
-          <span class="field__label">Боковые панели</span>
-          <div class="seg" id="seg-compact">
-            <button data-v="full" aria-pressed="${!prefs.compact}">
-              <span data-icon="panel-right"></span>Полные
-            </button>
-            <button data-v="compact" aria-pressed="${!!prefs.compact}">
-              <span data-icon="panel-right"></span>Компактные
-            </button>
-          </div>
-          <p class="hint">В компактном режиме обе панели сжимаются до одних иконок.</p>
-        </div>
+        <button class="aside-row" id="row-compact"
+                title="${prefs.compact ? 'Развернуть панели' : 'Свернуть панели'}">
+          <span class="aside-row__icon">${icon(prefs.compact ? 'panel-left' : 'panel-right')}</span>
+          <span class="aside-row__label">${prefs.compact ? 'Развернуть панели' : 'Свернуть панели'}</span>
+        </button>
+        <button class="aside-row" id="row-theme"
+                title="${dark ? 'Светлая тема' : 'Тёмная тема'}">
+          <span class="aside-row__icon">${icon(dark ? 'sun' : 'moon')}</span>
+          <span class="aside-row__label">${dark ? 'Светлая тема' : 'Тёмная тема'}</span>
+        </button>
       </div>`);
 
-    el.querySelectorAll('#seg-theme button').forEach((b) => {
-      b.onclick = () => { prefsMod.set({ theme: b.dataset.v }); buildAside(); };
-    });
-    el.querySelectorAll('#seg-compact button').forEach((b) => {
-      b.onclick = () => { prefsMod.set({ compact: b.dataset.v === 'compact' }); buildAside(); };
-    });
+    el.querySelector('#row-compact').onclick = () => {
+      prefsMod.set({ compact: !prefs.compact });
+      buildAside();
+    };
+    el.querySelector('#row-theme').onclick = () => {
+      prefsMod.set({ theme: prefs.theme === 'dark' ? 'light' : 'dark' });
+      buildAside();
+    };
     return el;
   }
 };
