@@ -15,7 +15,7 @@ export const usersPanel = {
 
   actions: () => [
     h(`<button class="btn btn--ghost btn--icon" id="users-refresh" title="Обновить"><span data-icon="refresh"></span></button>`),
-    h(`<button class="btn btn--primary" id="users-add"><span data-icon="plus" style="width:16px;height:16px;display:grid"></span>Добавить</button>`)
+    h(`<button class="btn btn--primary" id="users-add"><span data-icon="plus"></span>Добавить</button>`)
   ],
 
   async render(container) {

@@ -23,7 +23,7 @@ export const itemsPanel = {
 
   actions: () => [
     h(`<button class="btn btn--ghost btn--icon" id="cat-refresh" title="Обновить"><span data-icon="refresh"></span></button>`),
-    h(`<button class="btn btn--primary" id="cat-add"><span data-icon="plus" style="width:16px;height:16px;display:grid"></span>Добавить</button>`)
+    h(`<button class="btn btn--primary" id="cat-add"><span data-icon="plus"></span>Добавить</button>`)
   ],
 
   async render(container) {
@@ -140,7 +140,9 @@ function drawItems(wrap, list) {
             : `<span class="pill pill--off">без категории</span>`}</td>
           <td class="num">${money(i.item_cost)}</td>
           <td>${(Array.isArray(i.materials) ? i.materials : []).length
-            ? i.materials.map((m) => `<span class="chip">${esc(m.name)}</span>`).join(' ')
+            ? i.materials.map((m) => `<span class="chip">${esc(m.name)}${
+                (m.qty || 1) > 1 ? ` <span class="chip__qty">&times;${m.qty}</span>` : ''
+              }</span>`).join(' ')
             : '<span style="color:var(--ink-3)">—</span>'}</td>
           ${rowActions(i.id)}
         </tr>`).join('')}
@@ -287,7 +289,8 @@ function materialForm(mat) {
 function itemForm(item) {
   const isNew = !item;
   const chosen = new Map(
-    (Array.isArray(item?.materials) ? item.materials : []).map((m) => [Number(m.id), m.name])
+    (Array.isArray(item?.materials) ? item.materials : [])
+      .map((m) => [Number(m.id), Math.max(1, Number(m.qty) || 1)])
   );
 
   modal({
@@ -318,18 +321,27 @@ function itemForm(item) {
         <span class="field__label">Материалы</span>
         ${materials.length
           ? `<div class="picker" id="f-mats">${materials.map((m) => `
-              <label class="picker__row">
-                <input type="checkbox" value="${m.id}" data-name="${esc(m.material_name)}"
-                       ${chosen.has(m.id) ? 'checked' : ''}>
-                <span>${esc(m.material_name)}</span>
+              <div class="picker__row">
+                <input type="checkbox" id="mat-${m.id}" value="${m.id}"
+                       data-name="${esc(m.material_name)}" ${chosen.has(m.id) ? 'checked' : ''}>
+                <label for="mat-${m.id}">${esc(m.material_name)}</label>
                 <span class="picker__cost">${money(m.cost)}</span>
-              </label>`).join('')}</div>
+                <input type="number" class="picker__qty" data-qty-for="${m.id}"
+                       min="1" step="1" value="${chosen.get(m.id) ?? 1}"
+                       aria-label="Количество ${esc(m.material_name)}"
+                       ${chosen.has(m.id) ? '' : 'disabled'}>
+              </div>`).join('')}</div>
              <p class="hint" id="f-mats-sum"></p>`
           : `<p class="hint">Материалов пока нет — добавьте их на вкладке «Материалы».</p>`}
       </div>`,
     onSubmit: async (d) => {
-      const picked = [...document.querySelectorAll('#f-mats input:checked')]
-        .map((c) => ({ id: Number(c.value), name: c.dataset.name }));
+      const picked = [...document.querySelectorAll('#f-mats input[type=checkbox]:checked')]
+        .map((c) => ({
+          id: Number(c.value),
+          name: c.dataset.name,
+          qty: Math.max(1, Number(
+            document.querySelector(`#f-mats [data-qty-for="${c.value}"]`)?.value) || 1)
+        }));
       const payload = {
         item_name: d.item_name,
         item_category: d.item_category || null,
@@ -348,15 +360,25 @@ function itemForm(item) {
   const sum = document.getElementById('f-mats-sum');
   if (box && sum) {
     const recalc = () => {
-      const picked = [...box.querySelectorAll('input:checked')].map((c) => Number(c.value));
-      const total = materials
-        .filter((m) => picked.includes(m.id))
-        .reduce((acc, m) => acc + (m.cost || 0), 0);
-      sum.textContent = picked.length
-        ? `Выбрано: ${picked.length} · себестоимость ${total} ₽`
+      const rows = [...box.querySelectorAll('input[type=checkbox]')].map((c) => {
+        const qtyEl = box.querySelector(`[data-qty-for="${c.value}"]`);
+        // a quantity box is only meaningful while its material is ticked
+        if (qtyEl) qtyEl.disabled = !c.checked;
+        return { id: Number(c.value), on: c.checked, qty: Math.max(1, Number(qtyEl?.value) || 1) };
+      }).filter((r) => r.on);
+
+      const units = rows.reduce((acc, r) => acc + r.qty, 0);
+      const total = rows.reduce((acc, r) => {
+        const m = materials.find((x) => x.id === r.id);
+        return acc + (m?.cost || 0) * r.qty;
+      }, 0);
+
+      sum.textContent = rows.length
+        ? `Выбрано: ${rows.length} назв. · ${units} шт. · себестоимость ${total} ₽`
         : 'Ничего не выбрано.';
     };
     box.addEventListener('change', recalc);
+    box.addEventListener('input', recalc);
     recalc();
   }
 }

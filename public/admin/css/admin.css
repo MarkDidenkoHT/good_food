@@ -263,7 +263,8 @@ body.aside-compact .aside__head { justify-content: center; padding: 0; }
   border-radius: var(--r-pill); font-weight: 700; font-size: 13px; color: var(--ink-3);
 }
 .subtab:hover { background: var(--surface-2); color: var(--ink-2); }
-.subtab[aria-selected="true"] { background: var(--brand-soft); color: var(--brand); }
+.subtab[aria-selected="true"] { background: var(--brand); color: #fff; }
+.subtab[aria-selected="true"]:hover { background: var(--brand-hover); color: #fff; }
 
 /* ── material chips ─────────────────────────────────────────── */
 .chip {
@@ -278,12 +279,13 @@ body.aside-compact .aside__head { justify-content: center; padding: 0; }
   border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface);
 }
 .picker__row {
-  display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer;
+  display: flex; align-items: center; gap: 10px; padding: 8px 12px;
   border-bottom: 1px solid var(--line);
 }
 .picker__row:last-child { border-bottom: 0; }
 .picker__row:hover { background: var(--surface-2); }
-.picker__row span:nth-of-type(1) { flex: 1 1 auto; font-weight: 600; }
+.picker__row > label { flex: 1 1 auto; font-weight: 600; cursor: pointer; }
+.picker__row > input[type="checkbox"] { flex: 0 0 auto; cursor: pointer; }
 .picker__cost { color: var(--ink-3); font-size: 12px; white-space: nowrap; }
 
 /* ── inline alert ───────────────────────────────────────────── */
@@ -296,3 +298,20 @@ body.aside-compact .aside__head { justify-content: center; padding: 0; }
 .alert p { margin: 0 0 8px; font-size: 13px; color: var(--ink-2); }
 .alert__list { margin: 0; padding-left: 18px; font-size: 13px; color: var(--ink-2); }
 .alert__list li { margin: 3px 0; }
+
+
+/* ── icons in buttons ───────────────────────────────────────── */
+/* The <svg> has a viewBox but no width/height, so without this it collapses
+   to zero width as a flex child and the button looks empty. */
+.btn [data-icon] { display: inline-grid; place-items: center; flex: 0 0 auto; }
+.btn [data-icon] svg { width: 18px; height: 18px; display: block; }
+.btn--sm [data-icon] svg { width: 16px; height: 16px; }
+
+/* ── material quantities ────────────────────────────────────── */
+.picker__qty {
+  width: 64px; flex: 0 0 auto; padding: 4px 8px; text-align: right;
+  border: 1px solid var(--line-strong); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 13px;
+}
+.picker__qty:disabled { opacity: .4; cursor: not-allowed; }
+.chip__qty { color: var(--brand); font-weight: 800; }

@@ -259,10 +259,21 @@ function pickItem(b = {}) {
     // store a {id, name} snapshot so an item still reads correctly if a
     // material is later renamed or removed
     out.materials = (Array.isArray(b.materials) ? b.materials : [])
-      .map((m) => ({ id: Number(m?.id), name: String(m?.name ?? '').trim() }))
+      .map((m) => ({
+        id: Number(m?.id),
+        name: String(m?.name ?? '').trim(),
+        qty: toQty(m?.qty)
+      }))
       .filter((m) => Number.isFinite(m.id));
   }
   return out;
+}
+
+// how many of a material go into one item; rows written before quantities
+// existed have no qty, and those count as 1
+function toQty(v) {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n > 0 ? n : 1;
 }
 
 // item_cost / cost are bigint - whole units only
