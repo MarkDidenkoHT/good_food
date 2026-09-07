@@ -1,0 +1,87 @@
+import { icon, paintIcons } from './icons.js';
+
+/* ── tiny DOM helper ─────────────────────────────────────────── */
+export function h(html) {
+  const t = document.createElement('template');
+  t.innerHTML = html.trim();
+  const node = t.content.firstElementChild;
+  paintIcons(node);
+  return node;
+}
+
+export const esc = (s) =>
+  String(s ?? '').replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/* ── toasts ──────────────────────────────────────────────────── */
+export function toast(message, kind = 'ok') {
+  const el = h(`<div class="toast ${kind === 'err' ? 'toast--err' : ''}">${esc(message)}</div>`);
+  document.getElementById('toasts').append(el);
+  setTimeout(() => el.remove(), 3200);
+}
+
+/* ── modal ───────────────────────────────────────────────────── */
+// onSubmit(formData, close) — return false to keep the modal open.
+export function modal({ title, bodyHTML, submitLabel = 'Сохранить', onSubmit }) {
+  const root = document.getElementById('modal-root');
+  const el = h(`
+    <div class="modal">
+      <div class="modal__backdrop"></div>
+      <form class="modal__box">
+        <div class="modal__head"><div class="modal__title">${esc(title)}</div></div>
+        <div class="modal__body">${bodyHTML}</div>
+        <div class="modal__foot">
+          <button type="button" class="btn" data-cancel>Отмена</button>
+          <button type="submit" class="btn btn--primary">${esc(submitLabel)}</button>
+        </div>
+      </form>
+    </div>`);
+
+  const close = () => { el.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+
+  el.querySelector('[data-cancel]').onclick = close;
+  el.querySelector('.modal__backdrop').onclick = close;
+  document.addEventListener('keydown', onKey);
+
+  el.querySelector('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(e.target).entries());
+    const btn = e.target.querySelector('[type=submit]');
+    btn.disabled = true;
+    try {
+      const keep = await onSubmit?.(data, close);
+      if (keep !== false) close();
+    } catch (err) {
+      toast(err.message, 'err');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  root.append(el);
+  el.querySelector('input, select, textarea')?.focus();
+  return { close };
+}
+
+export function confirmDialog(title, text, onYes) {
+  return modal({
+    title,
+    bodyHTML: `<p style="margin:0">${esc(text)}</p>`,
+    submitLabel: 'Удалить',
+    onSubmit: onYes
+  });
+}
+
+/* ── placeholder page ────────────────────────────────────────── */
+export function placeholder(title, text) {
+  return h(`
+    <div class="placeholder">
+      <div class="placeholder__icon">${icon('construction')}</div>
+      <h2>${esc(title)}</h2>
+      <p>${esc(text)}</p>
+    </div>`);
+}
+
+export const fmtDate = (iso) =>
+  iso ? new Date(iso).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }) : '—';
