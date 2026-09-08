@@ -1,0 +1,284 @@
+/* Sushi loader — shared by the mini-app and the admin panel.
+   Served from the site root, so both link it as /loader.css.
+
+   The rolls and their keyframes are kept exactly as designed; everything
+   added here is packaging: a size knob, an optional caption, the full-screen
+   boot splash, and the inline block panels drop into a content area.
+
+   Scaling happens on the row as a whole rather than on each measurement, so
+   a small loader animates identically to a large one. */
+
+.sushi {
+  --sushi-scale: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+/* The rolls jump above their own boxes, so the row needs headroom or the
+   tops clip against whatever contains it. */
+.sushi__row {
+  display: flex;
+  gap: 14px;
+  align-items: flex-end;
+  height: calc(104px * var(--sushi-scale));
+  transform: scale(var(--sushi-scale));
+  transform-origin: center bottom;
+}
+
+.sushi__label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-3, #7c7c7c);
+  letter-spacing: .02em;
+}
+
+.sushi--sm { --sushi-scale: .48; }
+.sushi--md { --sushi-scale: .7; }
+
+/* ── one roll ───────────────────────────────────────────────── */
+
+.roll-wrap {
+  width: 54px;
+  height: 90px;
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.roll {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  position: relative;
+  flex-shrink: 0;
+  animation: sushi-jump 1.7s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+.shadow {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 44px;
+  height: 10px;
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 50%;
+  animation: sushi-shadow 1.7s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+.roll-wrap:nth-child(1) .roll,
+.roll-wrap:nth-child(1) .shadow { animation-delay: 0.00s; }
+.roll-wrap:nth-child(2) .roll,
+.roll-wrap:nth-child(2) .shadow { animation-delay: 0.17s; }
+.roll-wrap:nth-child(3) .roll,
+.roll-wrap:nth-child(3) .shadow { animation-delay: 0.34s; }
+.roll-wrap:nth-child(4) .roll,
+.roll-wrap:nth-child(4) .shadow { animation-delay: 0.51s; }
+.roll-wrap:nth-child(5) .roll,
+.roll-wrap:nth-child(5) .shadow { animation-delay: 0.68s; }
+
+@keyframes sushi-jump {
+  0%   { transform: translateY(0) scale(1, 1) rotate(0deg); }
+  10%  { transform: translateY(4px) scale(1.15, 0.8) rotate(0deg); }
+  35%  { transform: translateY(-46px) scale(0.92, 1.1) rotate(170deg); }
+  55%  { transform: translateY(-46px) scale(0.92, 1.1) rotate(180deg); }
+  80%  { transform: translateY(0) scale(1, 1) rotate(360deg); }
+  90%  { transform: translateY(4px) scale(1.15, 0.8) rotate(360deg); }
+  100% { transform: translateY(0) scale(1, 1) rotate(360deg); }
+}
+
+@keyframes sushi-shadow {
+  0%   { transform: translateX(-50%) scale(1); opacity: 0.4; }
+  10%  { transform: translateX(-50%) scale(1.2, 0.9); opacity: 0.45; }
+  35%  { transform: translateX(-50%) scale(0.5); opacity: 0.15; }
+  55%  { transform: translateX(-50%) scale(0.5); opacity: 0.15; }
+  80%  { transform: translateX(-50%) scale(1); opacity: 0.4; }
+  90%  { transform: translateX(-50%) scale(1.2, 0.9); opacity: 0.45; }
+  100% { transform: translateX(-50%) scale(1); opacity: 0.4; }
+}
+
+.roll-inner {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: #1c1c1c;
+  border: 2px solid #171717;
+  box-sizing: border-box;
+  position: relative;
+  overflow: hidden;
+}
+
+.nori {
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  border: 7px solid #1a2b1e;
+  box-sizing: border-box;
+}
+
+.rice {
+  position: absolute;
+  inset: 9px;
+  border-radius: 50%;
+  background: #f3ecd8;
+  overflow: hidden;
+}
+
+.rice::before,
+.rice::after {
+  content: '';
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.rice::before { top: 22%; left: 28%; }
+.rice::after { bottom: 20%; right: 26%; }
+
+.topping {
+  position: absolute;
+  inset: 4px 4px 46% 4px;
+  border-radius: 50% 50% 40% 40% / 60% 60% 30% 30%;
+  overflow: hidden;
+}
+
+.topping::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0.22) 0px,
+    rgba(255, 255, 255, 0.22) 2px,
+    transparent 2px,
+    transparent 7px
+  );
+}
+
+.salmon .topping { background: #e8663f; }
+.salmon .topping::before {
+  background-image: repeating-linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0.35) 0px,
+    rgba(255, 255, 255, 0.35) 2px,
+    transparent 2px,
+    transparent 6px
+  );
+}
+
+.tamago .topping {
+  background: #f7c948;
+  background-image: repeating-linear-gradient(
+    0deg,
+    rgba(150, 100, 10, 0.25) 0px,
+    rgba(150, 100, 10, 0.25) 3px,
+    transparent 3px,
+    transparent 9px
+  );
+}
+.tamago .topping::before { display: none; }
+
+.avocado .topping { background: #7fbf6e; }
+.avocado .topping::before {
+  background-image: repeating-linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.3) 0px,
+    rgba(255, 255, 255, 0.3) 1px,
+    transparent 1px,
+    transparent 5px
+  );
+}
+
+.tuna .topping { background: #b5342a; }
+.tuna .topping::before {
+  background-image: repeating-linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0.28) 0px,
+    rgba(255, 255, 255, 0.28) 2px,
+    transparent 2px,
+    transparent 8px
+  );
+}
+
+.cucumber .topping {
+  background: #f3ecd8;
+  inset: 4px 4px 40% 4px;
+}
+.cucumber .topping::before {
+  background-image: none;
+  background: conic-gradient(
+    #5aa86e 0deg 40deg,
+    transparent 40deg 90deg,
+    #5aa86e 90deg 130deg,
+    transparent 130deg 180deg,
+    #5aa86e 180deg 220deg,
+    transparent 220deg 270deg,
+    #5aa86e 270deg 310deg,
+    transparent 310deg 360deg
+  );
+  opacity: 0.9;
+}
+
+/* ── boot splash ────────────────────────────────────────────── */
+
+/* Painted from the HTML before any script runs, so the first thing on screen
+   is the loader rather than a blank page. */
+.splash {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg, #f6f5f2);
+  transition: opacity 260ms ease;
+}
+
+.splash--out { opacity: 0; pointer-events: none; }
+
+/* Same overlay used mid-session: the screen behind stays readable but is
+   plainly out of reach. */
+.splash--busy { background: color-mix(in srgb, var(--bg, #f6f5f2) 82%, transparent); }
+
+/* ── inline block ───────────────────────────────────────────── */
+
+/* What a panel or a screen shows in place of content it is still fetching. */
+.sushi-block {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+}
+
+/* ── busy overlay ───────────────────────────────────────────── */
+
+/* Laid over content that is already on screen while it refreshes, so the
+   numbers underneath cannot be misread as current. */
+.sushi-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--surface, #fff) 72%, transparent);
+  border-radius: inherit;
+}
+
+/* Fully covers a screen being replaced, so a panel's half-built frame and its
+   own inner loader never show through alongside this one. */
+.sushi-veil--solid { background: var(--bg, #f6f5f2); }
+
+/* In a scrolling container the veil is anchored to the top of the content, so
+   it needs its own height rather than stretching to the full scroll length —
+   otherwise the loader centres itself somewhere far down the page. */
+.content > .sushi-veil { bottom: auto; height: 100%; }
+
+@media (prefers-reduced-motion: reduce) {
+  .roll, .shadow { animation-duration: 3.4s; }
+}

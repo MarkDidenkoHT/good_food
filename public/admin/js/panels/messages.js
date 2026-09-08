@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { h, esc, toast, modal, confirmDialog, fmtDate } from '../ui.js';
 import { paintIcons } from '../icons.js';
+import { showLoader } from '/loader.js';
 
 /* Рассылки: compose a message, pick who gets it, and keep the record.
 
@@ -70,6 +71,7 @@ export const messagesPanel = {
 };
 
 async function load() {
+  showLoader(root?.querySelector('#msg-body'), { size: 'sm', count: 4 });
   try {
     [rows, companies, users] = await Promise.all([
       api.get('/api/admin/broadcasts'),

@@ -2,6 +2,8 @@
    differ only by the `kind` sent with the basket. Materials and their costs
    are never fetched here — customers see items and prices only. */
 
+import { hideSplash, showLoader, loaderHTML } from '/loader.js';
+
 const tg = window.Telegram?.WebApp;
 tg?.ready();
 tg?.expand();
@@ -460,12 +462,31 @@ function submitLabel(groups) {
   return groups[0].key === 'return' ? 'Оформить возврат' : 'Оформить заказ';
 }
 
+/* Sending a basket is the one wait here worth covering the screen for: it can
+   take two round trips, and nothing on the page behind it is safe to press
+   while they are in the air. */
+function blockScreen(label) {
+  const el = document.createElement('div');
+  el.className = 'splash splash--busy';
+  el.innerHTML = loaderHTML({ size: 'md', count: 4, label });
+  document.body.append(el);
+  return () => el.remove();
+}
+
 /* One request per non-empty basket: an order and a return are separate
    documents and are confirmed separately by an admin. */
 async function submit() {
   const btn = document.getElementById('cart-send');
   btn.disabled = true;
+  const unblock = blockScreen(editing ? 'Сохраняем…' : 'Отправляем…');
+  try {
+    return await sendBaskets(btn);
+  } finally {
+    unblock();
+  }
+}
 
+async function sendBaskets(btn) {
   if (editing) return saveEdit(btn);
 
   const jobs = ['order', 'return']
@@ -524,7 +545,7 @@ let historyTimer = null;
 
 async function renderHistory() {
   const body = document.getElementById('body');
-  body.innerHTML = `<div class="empty">Загрузка…</div>`;
+  showLoader(body, { size: 'sm', count: 4 });
   document.getElementById('cart')?.remove();
   document.body.style.paddingBottom = '24px';
 
@@ -623,4 +644,10 @@ function paintHistory(orders) {
   });
 }
 
-start();
+/* Every path through start() ends with a screen painted, so the splash comes
+   off once it settles — including the failure paths, which have something to
+   say and cannot say it from behind the loader. */
+start()
+  .catch(() => centered('Не удалось загрузить',
+    'Проверьте соединение и откройте приложение снова.'))
+  .finally(hideSplash);

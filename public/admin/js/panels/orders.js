@@ -3,6 +3,7 @@ import { h, esc, toast, confirmDialog, fmtDate } from '../ui.js';
 import { paintIcons } from '../icons.js';
 import { downloadXlsx } from '../xlsx.js';
 import { downloadInvoice } from '../invoice.js';
+import { showLoader } from '/loader.js';
 
 /* Only the date range costs a request. Status, type and company narrow the
    rows already in memory, so those dropdowns react instantly. */
@@ -71,6 +72,7 @@ export const ordersPanel = {
 };
 
 async function load() {
+  showLoader(root?.querySelector('#ord-wrap'), { size: 'sm', count: 4 });
   try {
     const qs = new URLSearchParams();
     if (filters.from) qs.set('from', dayStart(filters.from));

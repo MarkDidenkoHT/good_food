@@ -10,8 +10,26 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap">
 <link rel="stylesheet" href="./css/theme.css">
 <link rel="stylesheet" href="./css/admin.css">
+<link rel="stylesheet" href="/loader.css">
 </head>
 <body>
+
+<!-- ── boot splash ────────────────────────────────────────────
+     Inline markup, not built by script: it has to be on screen while the
+     modules are still downloading, which is exactly when there is nothing
+     else to look at. app.js takes it away. -->
+<div class="splash" id="splash">
+  <div class="sushi">
+    <div class="sushi__row">
+      <div class="roll-wrap"><div class="shadow"></div><div class="roll salmon"><div class="roll-inner"><div class="nori"></div><div class="rice"><div class="topping"></div></div></div></div></div>
+      <div class="roll-wrap"><div class="shadow"></div><div class="roll tamago"><div class="roll-inner"><div class="nori"></div><div class="rice"><div class="topping"></div></div></div></div></div>
+      <div class="roll-wrap"><div class="shadow"></div><div class="roll avocado"><div class="roll-inner"><div class="nori"></div><div class="rice"><div class="topping"></div></div></div></div></div>
+      <div class="roll-wrap"><div class="shadow"></div><div class="roll tuna"><div class="roll-inner"><div class="nori"></div><div class="rice"><div class="topping"></div></div></div></div></div>
+      <div class="roll-wrap"><div class="shadow"></div><div class="roll cucumber"><div class="roll-inner"><div class="nori"></div><div class="rice"><div class="topping"></div></div></div></div></div>
+    </div>
+    <div class="sushi__label">Загрузка панели…</div>
+  </div>
+</div>
 
 <!-- ── login ──────────────────────────────────────────────── -->
 <div class="login" id="login" hidden>
@@ -76,6 +94,8 @@
         <div class="topbar__sub" id="page-sub"></div>
       </div>
       <div class="topbar__spacer"></div>
+      <!-- filled by api.js whenever a request is in flight -->
+      <div id="busy" class="topbar__busy" hidden></div>
       <div id="page-actions" style="display:flex;gap:8px"></div>
     </header>
     <div class="content" id="content"></div>

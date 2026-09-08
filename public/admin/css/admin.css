@@ -82,6 +82,14 @@ body.nav-compact .nav__list { padding: 10px 8px; }
   padding: 0 20px; background: var(--surface); border-bottom: 1px solid var(--line);
 }
 .topbar__title { font-size: 17px; font-weight: 800; letter-spacing: -.2px; }
+
+/* The in-flight indicator. Height is fixed so appearing and disappearing
+   never nudges the row it sits in. */
+.topbar__busy {
+  flex: 0 0 auto; height: 36px; display: flex; align-items: center;
+  overflow: hidden;
+}
+.topbar__busy .sushi__row { height: calc(64px * var(--sushi-scale)); }
 .topbar__sub { color: var(--ink-3); font-size: 12px; }
 .topbar__spacer { flex: 1 1 auto; }
 .content { flex: 1 1 auto; overflow-y: auto; padding: 20px; }

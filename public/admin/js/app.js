@@ -3,6 +3,7 @@ import { paintIcons, icon } from './icons.js';
 import { h, esc, toast } from './ui.js';
 import * as prefsMod from './prefs.js';
 import { prefs } from './prefs.js';
+import { hideSplash, veil } from '/loader.js';
 import { usersPanel } from './panels/users.js';
 import { itemsPanel } from './panels/items.js';
 import { settingsPanel } from './panels/settings.js';
@@ -25,10 +26,13 @@ start();
 async function start() {
   try {
     await api.get('/api/auth/admin/me');
-    showShell();
+    await showShell();
   } catch (e) {
     if (e instanceof Unauthorized) showLogin();
     else toast(e.message, 'err');
+  } finally {
+    // whichever way boot went, the splash has done its job
+    hideSplash();
   }
 }
 
@@ -65,7 +69,8 @@ async function showShell() {
   await prefsMod.loadRemote();
 
   const { panel, params } = parseHash();
-  navigate(panel || usersPanel, params);
+  // awaited so the splash covers the first panel's own fetching too
+  await navigate(panel || usersPanel, params);
 }
 
 function buildNav() {
@@ -138,13 +143,21 @@ async function navigate(panel, params = {}) {
   (panel.actions?.() || []).forEach((el) => actions.append(el));
   paintIcons(actions);
 
+  // A panel appends its own frame and then fills it from the network, so the
+  // loader goes over the top rather than into the container — the panel keeps
+  // the root element it was handed, and nothing it looks up moves underneath
+  // it while it works.
   const content = $('#content');
   content.innerHTML = '';
+  const done = veil(content, { size: 'md', count: 5, label: 'Загрузка…', opaque: true });
+
   try {
     await panel.render(content, params);
   } catch (e) {
-    if (e instanceof Unauthorized) return showLogin();
+    if (e instanceof Unauthorized) { done(); return showLogin(); }
     toast(e.message, 'err');
+  } finally {
+    done();
   }
   paintIcons(content);
 }
