@@ -485,14 +485,12 @@ async function openDetail(id) {
         <div style="max-height:280px;overflow:auto">
           <table class="table">
             <thead><tr>
-              <th>Пользователь</th><th style="width:120px">Статус</th>
-              <th style="width:110px">message_id</th><th>Ошибка</th>
+              <th>Пользователь</th><th style="width:130px">Статус</th><th>Ошибка</th>
             </tr></thead>
             <tbody>${b.targets.map((t) => `
               <tr>
                 <td>${esc(t.user_name || `#${t.user_id ?? '—'}`)}</td>
                 <td>${esc(TARGET_STATUS[t.status] || t.status)}</td>
-                <td class="num">${t.message_id ?? '—'}</td>
                 <td class="hint">${esc(t.error || '')}</td>
               </tr>`).join('')}</tbody>
           </table>
