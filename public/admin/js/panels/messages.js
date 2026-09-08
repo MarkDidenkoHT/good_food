@@ -121,7 +121,7 @@ function drawTabs() {
   if (!bar) return;
   const t = [['new', 'Новая рассылка'], ['history', `История (${rows.length})`]];
   bar.innerHTML = t.map(([id, label]) =>
-    `<button role="tab" data-tab="${id}" aria-selected="${tab === id}">${label}</button>`).join('');
+    `<button class="subtab" role="tab" data-tab="${id}" aria-selected="${tab === id}">${esc(label)}</button>`).join('');
   bar.querySelectorAll('[data-tab]').forEach((b) => {
     b.onclick = () => { tab = b.dataset.tab; draw(); };
   });
@@ -212,6 +212,10 @@ function pickerHTML(id, options, chosen) {
   }
   return `
     <div class="field">
+      <p class="picker__tools">
+        <button type="button" class="linkbtn" data-all="${id}">Выбрать все</button> ·
+        <button type="button" class="linkbtn" data-none="${id}">Снять выбор</button>
+      </p>
       <div class="picker" id="${id}">
         ${options.map((o) => `
           <label class="picker__row">
@@ -220,10 +224,6 @@ function pickerHTML(id, options, chosen) {
             <span class="picker__note">${esc(o.note)}</span>
           </label>`).join('')}
       </div>
-      <p class="hint">
-        <button type="button" class="linkbtn" data-all="${id}">Выбрать все</button> ·
-        <button type="button" class="linkbtn" data-none="${id}">Снять выбор</button>
-      </p>
     </div>`;
 }
 

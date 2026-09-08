@@ -269,6 +269,12 @@ label.picker__row { cursor: pointer; }
 .picker__label { flex: 1 1 auto; font-weight: 600; }
 .picker__note { color: var(--ink-3); font-size: 12px; white-space: nowrap; }
 
+/* Sits above the list it acts on, so the actions are read before the rows. */
+.picker__tools {
+  margin: 0 0 6px; font-size: 12px; color: var(--ink-3);
+  display: flex; gap: 6px; align-items: center;
+}
+
 /* A button that reads as a link — "выбрать все" and friends, which belong in
    a hint line rather than on a button of their own. */
 .linkbtn {
