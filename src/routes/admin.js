@@ -629,7 +629,7 @@ adminRouter.put('/settings/orders', async (req, res) => {
     .from('app_settings').select('value').eq('key', 'orders').maybeSingle();
   const value = { ...SETTING_DEFAULTS.orders, ...(current?.value || {}) };
 
-  for (const key of ['allow_edit_confirmed', 'allow_delete_new',
+  for (const key of ['allow_edit_confirmed', 'allow_delete_new', 'returns_from_history',
                      'cutoff_enabled', 'lock_after_cutoff']) {
     if (key in req.body) value[key] = !!req.body[key];
   }

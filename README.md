@@ -99,6 +99,29 @@ on those numbers. A cancellation marks the old post instead of removing it.
 
 Apply `db/migrations/order_edit_cutoff.sql` before deploying this.
 
+## Returns out of the order history
+
+Настройки → «Оформление возврата» has two modes.
+
+**Из каталога** (default) — a return is composed like an order: pick from the
+catalogue on the Возврат tab.
+
+**Только из истории заказов** — the Возврат tab disappears. The customer opens
+a past order in История and presses «Вернуть», which lists that order's own
+lines with a stepper capped at what is still returnable.
+
+What is still returnable is the ordered quantity **less everything already
+sent back against that same order**, so a portion cannot be returned twice
+across several attempts; a rejected return frees its quantity again. Lines are
+priced from the order's own snapshot rather than today's catalogue — the
+customer is sending back what they bought, at what they were charged.
+
+`orders.source_order_id` records which order a return came out of. The cap is
+enforced in `POST /api/app/orders`, not just in the picker: an over-quantity
+request answers **409**, an unknown or foreign order **404**, and a return of
+something that order never contained **400**. Apply
+`db/migrations/010_return_source.sql`.
+
 ## Withdrawing an item
 
 `items.available` takes a position off the order list without deleting it.

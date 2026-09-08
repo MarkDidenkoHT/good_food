@@ -32,12 +32,13 @@ export function onModalCancel(fn) {
 }
 
 // onSubmit(formData, close) — return false to keep the modal open.
-export function modal({ title, bodyHTML, submitLabel = 'Сохранить', onSubmit }) {
+// `wide` gives a form room for two columns of fields.
+export function modal({ title, bodyHTML, submitLabel = 'Сохранить', onSubmit, wide = false }) {
   const root = document.getElementById('modal-root');
   const el = h(`
     <div class="modal">
       <div class="modal__backdrop"></div>
-      <form class="modal__box">
+      <form class="modal__box${wide ? ' modal__box--wide' : ''}">
         <div class="modal__head"><div class="modal__title">${esc(title)}</div></div>
         <div class="modal__body">${bodyHTML}</div>
         <div class="modal__foot">

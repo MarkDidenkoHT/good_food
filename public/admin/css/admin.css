@@ -211,14 +211,36 @@ body.nav-compact .nav__list { padding: 10px 8px; }
 /* ── modal ──────────────────────────────────────────────────── */
 .modal { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; }
 .modal__backdrop { position: absolute; inset: 0; background: #06053266; backdrop-filter: blur(2px); }
+/* A column, so a long form scrolls its own body and keeps the title and the
+   buttons where they were rather than running off the screen. */
 .modal__box {
   position: relative; width: 100%; max-width: 440px;
+  max-height: calc(100vh - 40px);
+  display: flex; flex-direction: column;
   background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--shadow-lg); overflow: hidden;
 }
-.modal__head { display: flex; align-items: center; padding: 16px; border-bottom: 1px solid var(--line); }
+.modal__box--wide { max-width: 860px; }
+.modal__head { display: flex; align-items: center; padding: 16px; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
 .modal__title { font-weight: 800; font-size: 16px; flex: 1 1 auto; }
-.modal__body { padding: 16px; }
-.modal__foot { display: flex; gap: 8px; justify-content: flex-end; padding: 16px; border-top: 1px solid var(--line); }
+.modal__body { padding: 16px; overflow-y: auto; flex: 1 1 auto; }
+.modal__foot { display: flex; gap: 8px; justify-content: flex-end; padding: 16px; border-top: 1px solid var(--line); flex: 0 0 auto; }
+
+/* ── form layout ────────────────────────────────────────────── */
+
+/* Two columns of fields instead of one tall stack. Collapses back to one
+   column when there is no width to spend. */
+.form-cols {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0 24px; align-items: start;
+}
+.form-cols > * { min-width: 0; }
+
+/* Short fields that read fine side by side — a price next to a category. */
+.field-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 12px; }
+
+@media (max-width: 760px) {
+  .form-cols, .field-row { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* ── toast ──────────────────────────────────────────────────── */
 .toasts { position: fixed; right: 20px; bottom: 20px; z-index: 60; display: flex; flex-direction: column; gap: 8px; }
@@ -273,6 +295,9 @@ body.nav-compact .nav__list { padding: 10px 8px; }
 .picker__row > label { flex: 1 1 auto; font-weight: 600; cursor: pointer; }
 .picker__row > input[type="checkbox"] { flex: 0 0 auto; cursor: pointer; }
 .picker__cost { color: var(--ink-3); font-size: 12px; white-space: nowrap; }
+
+/* Beside a column of short fields the list has the height to spare. */
+.picker--tall { max-height: 420px; }
 
 /* Broadcast audience picker: the whole row is the label, so the name takes
    the slack and the count stays pinned right. */

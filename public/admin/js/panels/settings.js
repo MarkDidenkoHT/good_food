@@ -14,6 +14,7 @@ let settings = {
   notifications: { notify_owner: true },
   orders: {
     allow_edit_confirmed: false, allow_delete_new: false,
+    returns_from_history: false,
     cutoff_enabled: false, cutoff_time: '22:00', lock_after_cutoff: true,
     after_cutoff: 'next_day', resume_time: '08:00'
   }
@@ -70,6 +71,7 @@ function draw() {
   const blocking = o.after_cutoff === 'block';
   const allowDelete = !!o.allow_delete_new;
   const editConfirmed = !!o.allow_edit_confirmed;
+  const fromHistory = !!o.returns_from_history;
 
   body.innerHTML = '';
   const card = frag(`
@@ -127,7 +129,7 @@ function draw() {
              приняли${cutoffOn && lockAfter ? ', но не позже времени закрытия' : ''}.</p>
         </div>
 
-        <div class="field" style="margin-bottom:0">
+        <div class="field">
           <span class="field__label">Отмена неподтверждённых заказов</span>
           <div class="seg" id="seg-delete">
             <button data-v="off" aria-pressed="${!allowDelete}">Запрещена</button>
@@ -135,6 +137,17 @@ function draw() {
           </div>
           <p class="hint">Разрешает заказчику удалить свой заказ, пока его не
              подтвердили.</p>
+        </div>
+
+        <div class="field" style="margin-bottom:0">
+          <span class="field__label">Оформление возврата</span>
+          <div class="seg" id="seg-returns">
+            <button data-v="free"    aria-pressed="${!fromHistory}">Из каталога</button>
+            <button data-v="history" aria-pressed="${fromHistory}">Только из истории заказов</button>
+          </div>
+          <p class="hint">${fromHistory
+            ? 'Вкладки «Возврат» в приложении нет. Заказчик открывает нужный заказ в истории и отмечает, что возвращает — не больше, чем было заказано.'
+            : 'Заказчик собирает возврат из каталога, как обычный заказ.'}</p>
         </div>
       </div>
     </div>
@@ -199,6 +212,9 @@ function draw() {
   });
   card.querySelectorAll('#seg-delete button').forEach((b) => {
     b.onclick = () => saveOrders({ allow_delete_new: b.dataset.v === 'on' });
+  });
+  card.querySelectorAll('#seg-returns button').forEach((b) => {
+    b.onclick = () => saveOrders({ returns_from_history: b.dataset.v === 'history' });
   });
   card.querySelectorAll('#seg-edit-confirmed button').forEach((b) => {
     b.onclick = () => saveOrders({ allow_edit_confirmed: b.dataset.v === 'on' });

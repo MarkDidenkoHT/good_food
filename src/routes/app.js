@@ -4,7 +4,8 @@ import { requireUser } from '../lib/auth.js';
 import { sendNewOrderNotice, sendOrderEditedNotice, markOrderDeleted } from '../lib/notices.js';
 import { signedUrlMap } from '../lib/storage.js';
 import { orderSettings, editDeadline, canEdit, canDelete, editableStatuses,
-         orderingWindow, serviceDateFor, priceLines, blockedMessage, TZ }
+         orderingWindow, serviceDateFor, priceLines, blockedMessage,
+         returnableFrom, priceReturn, overMessage, TZ }
   from '../lib/orders.js';
 
 export const appRouter = Router();
@@ -64,6 +65,8 @@ function orderRules(settings, now = new Date()) {
     cutoff_time: settings.cutoff_time,
     allow_delete_new: Boolean(settings.allow_delete_new),
     allow_edit_confirmed: Boolean(settings.allow_edit_confirmed),
+    // hides the Возврат tab: returns are then started from a past order
+    returns_from_history: Boolean(settings.returns_from_history),
     ordering_blocked: window.blocked,
     resumes_at: window.resumes_at?.toISOString() || null,
     service_date: window.service_date,
@@ -76,7 +79,8 @@ appRouter.get('/orders', async (req, res) => {
   const [{ data, error }, settings] = await Promise.all([
     supabase
       .from('orders')
-      .select('id, created_at, kind, status, items, total, comment, user_id, edited_at, service_date')
+      .select('id, created_at, kind, status, items, total, comment, user_id, edited_at, ' +
+              'service_date, source_order_id')
       .eq('company_id', req.user.company_id)
       .order('created_at', { ascending: false })
       .limit(50),
@@ -84,13 +88,48 @@ appRouter.get('/orders', async (req, res) => {
   ]);
   if (error) return dbError(res, error, 500);
 
+  const rows = data || [];
+
+  /* With returns driven from history, each order has to say how much of it is
+     still returnable — the ordered quantity less everything already sent back
+     against it. One pass over the returns already in hand, so the list costs
+     no extra queries. */
+  const returned = new Map();                 // source order id -> item id -> qty
+  if (settings.returns_from_history) {
+    for (const r of rows) {
+      if (r.kind !== 'return' || !r.source_order_id || r.status === 'rejected') continue;
+      const per = returned.get(String(r.source_order_id)) || new Map();
+      for (const l of Array.isArray(r.items) ? r.items : []) {
+        const id = Number(l.id);
+        per.set(id, (per.get(id) || 0) + (Number(l.qty) || 0));
+      }
+      returned.set(String(r.source_order_id), per);
+    }
+  }
+
+  const returnableLines = (o) => {
+    const used = returned.get(String(o.id)) || new Map();
+    return (Array.isArray(o.items) ? o.items : []).map((l) => {
+      const id = Number(l.id);
+      const qty = Number(l.qty) || 0;
+      return { id, name: l.name, cost: Number(l.cost) || 0, qty,
+               left: Math.max(0, qty - (used.get(id) || 0)) };
+    }).filter((l) => l.left > 0);
+  };
+
   const now = new Date();
-  res.json((data || []).map((o) => ({
-    ...o,
-    editable_until: editDeadline(o, settings)?.toISOString() || null,
-    can_edit: canEdit(o, settings, now),
-    can_delete: canDelete(o, settings, now)
-  })));
+  res.json(rows.map((o) => {
+    const out = {
+      ...o,
+      editable_until: editDeadline(o, settings)?.toISOString() || null,
+      can_edit: canEdit(o, settings, now),
+      can_delete: canDelete(o, settings, now)
+    };
+    if (settings.returns_from_history && o.kind === 'order' && o.status !== 'rejected') {
+      out.returnable = returnableLines(o);
+    }
+    return out;
+  }));
 });
 
 appRouter.post('/orders', async (req, res) => {
@@ -113,17 +152,48 @@ appRouter.post('/orders', async (req, res) => {
   if (!wanted.length) return res.status(400).json({ error: 'Корзина пуста' });
 
   // Price the order from the database, never from the client: the browser
-  // sends ids and quantities, nothing about cost. Availability is checked
-  // here too — a basket may have been filled before an item was withdrawn.
-  let priced;
-  try {
-    priced = await priceLines(wanted, { forOrder: kind === 'order' });
-  } catch (e) {
-    return dbError(res, e, 500);
+  // sends ids and quantities, nothing about cost.
+  let lines;
+  let total;
+  let sourceId = null;
+
+  if (kind === 'return' && settings.returns_from_history) {
+    // A return is a claim against something actually bought, so it is priced
+    // from that order's snapshot and capped by what is left of it.
+    sourceId = Number(req.body?.source_order_id) || null;
+    if (!sourceId) {
+      return res.status(400).json({ error: 'Возврат оформляется из истории заказов' });
+    }
+
+    let returnable;
+    try {
+      returnable = await returnableFrom(sourceId, req.user.company_id);
+    } catch (e) {
+      return dbError(res, e, 500);
+    }
+    if (!returnable) return res.status(404).json({ error: 'Заказ не найден' });
+
+    const priced = priceReturn(wanted, returnable);
+    if (priced.over.length) return res.status(409).json({ error: overMessage(priced.over) });
+    if (!priced.lines.length) {
+      return res.status(400).json({ error: 'Из этого заказа нечего вернуть' });
+    }
+    ({ lines, total } = priced);
+  } else {
+    // Availability is checked here too — a basket may have been filled before
+    // an item was withdrawn.
+    let priced;
+    try {
+      priced = await priceLines(wanted, { forOrder: kind === 'order' });
+    } catch (e) {
+      return dbError(res, e, 500);
+    }
+    if (priced.blocked.length) {
+      return res.status(409).json({ error: blockedMessage(priced.blocked) });
+    }
+    if (!priced.lines.length) return res.status(400).json({ error: 'Позиции не найдены' });
+    ({ lines, total } = priced);
   }
-  const { lines, total, blocked } = priced;
-  if (blocked.length) return res.status(409).json({ error: blockedMessage(blocked) });
-  if (!lines.length) return res.status(400).json({ error: 'Позиции не найдены' });
 
   const { data: order, error: insErr } = await supabase
     .from('orders')
@@ -135,6 +205,7 @@ appRouter.post('/orders', async (req, res) => {
       items: lines,
       total,
       comment,
+      source_order_id: sourceId,
       service_date: window.service_date
     })
     .select().single();

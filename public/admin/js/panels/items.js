@@ -312,56 +312,71 @@ function itemForm(item) {
   modal({
     title: isNew ? 'Новая позиция' : `Изменить: ${item.item_name}`,
     submitLabel: isNew ? 'Создать' : 'Сохранить',
+    wide: true,
+    // Two columns: what the position *is* on the left, what it is made of on
+    // the right. The materials list is the tall part, so standing it beside
+    // the short fields is what keeps the dialog on one screen.
     bodyHTML: `
-      <div class="field">
-        <label class="field__label" for="f-item">Название позиции</label>
-        <input class="input" id="f-item" name="item_name" required value="${esc(item?.item_name || '')}">
-      </div>
-      <div class="field">
-        <label class="field__label" for="f-item-cat">Категория</label>
-        <select class="input" id="f-item-cat" name="item_category">
-          <option value="">— без категории —</option>
-          ${categories.map((c) => `
-            <option value="${esc(c.category_name)}" ${item?.item_category === c.category_name ? 'selected' : ''}>
-              ${esc(c.category_name)}
-            </option>`).join('')}
-        </select>
-        <p class="hint">Необязательно. Но для показа по категориям в приложении нужна у всех позиций.</p>
-      </div>
-      <div class="field">
-        <label class="field__label" for="f-item-cost">Цена</label>
-        <input class="input" id="f-item-cost" name="item_cost" type="number" min="0" step="1"
-               value="${item?.item_cost ?? ''}" placeholder="0">
-      </div>
-      <div class="field">
-        <span class="field__label">Доступность</span>
-        <div class="seg" id="f-item-avail">
-          <button type="button" data-v="on"  aria-pressed="${item?.available !== false}">В продаже</button>
-          <button type="button" data-v="off" aria-pressed="${item?.available === false}">Снята</button>
+      <div class="form-cols">
+        <div>
+          <div class="field">
+            <label class="field__label" for="f-item">Название позиции</label>
+            <input class="input" id="f-item" name="item_name" required value="${esc(item?.item_name || '')}">
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label class="field__label" for="f-item-cat">Категория</label>
+              <select class="input" id="f-item-cat" name="item_category">
+                <option value="">— без категории —</option>
+                ${categories.map((c) => `
+                  <option value="${esc(c.category_name)}" ${item?.item_category === c.category_name ? 'selected' : ''}>
+                    ${esc(c.category_name)}
+                  </option>`).join('')}
+              </select>
+            </div>
+            <div class="field">
+              <label class="field__label" for="f-item-cost">Цена</label>
+              <input class="input" id="f-item-cost" name="item_cost" type="number" min="0" step="1"
+                     value="${item?.item_cost ?? ''}" placeholder="0">
+            </div>
+          </div>
+          <p class="hint" style="margin-top:-10px">Категория необязательна, но для показа
+             по категориям в приложении нужна у всех позиций.</p>
+
+          <div class="field">
+            <span class="field__label">Доступность</span>
+            <div class="seg" id="f-item-avail">
+              <button type="button" data-v="on"  aria-pressed="${item?.available !== false}">В продаже</button>
+              <button type="button" data-v="off" aria-pressed="${item?.available === false}">Снята</button>
+            </div>
+            <!-- the segment writes here so the modal's FormData carries it -->
+            <input type="hidden" name="available" id="f-item-avail-v"
+                   value="${item?.available === false ? 'off' : 'on'}">
+            <p class="hint">Снятую позицию нельзя заказать. Она остаётся в истории
+               заказов и доступна для возврата.</p>
+          </div>
+
+          ${imageFieldHTML(item?.image_path)}
         </div>
-        <!-- the segment writes here so the modal's FormData carries it -->
-        <input type="hidden" name="available" id="f-item-avail-v"
-               value="${item?.available === false ? 'off' : 'on'}">
-        <p class="hint">Снятую позицию нельзя заказать. Она остаётся в истории
-           заказов и доступна для возврата.</p>
-      </div>
-      ${imageFieldHTML(item?.image_path)}
-      <div class="field" style="margin-bottom:0;margin-top:16px">
-        <span class="field__label">Сырьё</span>
-        ${materials.length
-          ? `<div class="picker" id="f-mats">${materials.map((m) => `
-              <div class="picker__row">
-                <input type="checkbox" id="mat-${m.id}" value="${m.id}"
-                       data-name="${esc(m.material_name)}" ${chosen.has(m.id) ? 'checked' : ''}>
-                <label for="mat-${m.id}">${esc(m.material_name)}</label>
-                <span class="picker__cost">${money(m.cost)}</span>
-                <input type="number" class="picker__qty" data-qty-for="${m.id}"
-                       min="1" step="1" value="${chosen.get(m.id) ?? 1}"
-                       aria-label="Количество ${esc(m.material_name)}"
-                       ${chosen.has(m.id) ? '' : 'disabled'}>
-              </div>`).join('')}</div>
-             <p class="hint" id="f-mats-sum"></p>`
-          : `<p class="hint">Сырья пока нет — добавьте его на вкладке «Сырьё».</p>`}
+
+        <div class="field" style="margin-bottom:0">
+          <span class="field__label">Сырьё</span>
+          ${materials.length
+            ? `<div class="picker picker--tall" id="f-mats">${materials.map((m) => `
+                <div class="picker__row">
+                  <input type="checkbox" id="mat-${m.id}" value="${m.id}"
+                         data-name="${esc(m.material_name)}" ${chosen.has(m.id) ? 'checked' : ''}>
+                  <label for="mat-${m.id}">${esc(m.material_name)}</label>
+                  <span class="picker__cost">${money(m.cost)}</span>
+                  <input type="number" class="picker__qty" data-qty-for="${m.id}"
+                         min="1" step="1" value="${chosen.get(m.id) ?? 1}"
+                         aria-label="Количество ${esc(m.material_name)}"
+                         ${chosen.has(m.id) ? '' : 'disabled'}>
+                </div>`).join('')}</div>
+               <p class="hint" id="f-mats-sum"></p>`
+            : `<p class="hint">Сырья пока нет — добавьте его на вкладке «Сырьё».</p>`}
+        </div>
       </div>`,
     onSubmit: async (d) => {
       const picked = [...document.querySelectorAll('#f-mats input[type=checkbox]:checked')]

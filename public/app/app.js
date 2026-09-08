@@ -209,11 +209,12 @@ function render() {
                   ${editing && editing.kind !== 'order' ? 'disabled' : ''}>
             Заказ<span class="tab__count" data-count="order"></span>
           </button>
+          ${returnsFromHistory() ? '' : `
           <button class="tab" data-screen="catalog" data-kind="return"
                   aria-selected="${screen === 'catalog' && kind === 'return'}"
                   ${editing && editing.kind !== 'return' ? 'disabled' : ''}>
             Возврат<span class="tab__count" data-count="return"></span>
-          </button>
+          </button>`}
           <button class="tab" data-screen="history"
                   aria-selected="${screen === 'history'}">История</button>
         </div>
@@ -231,6 +232,7 @@ function render() {
 
   paintTabCounts();
 
+  if (screen === 'return') return renderReturn();
   if (screen === 'history') return renderHistory();
   renderCatalog();
 }
@@ -244,6 +246,10 @@ function paintTabCounts() {
     el.hidden = !units;
   });
 }
+
+/* With this on, a return is not composed from the catalogue: there is no
+   Возврат tab, and the customer starts one from a past order in История. */
+const returnsFromHistory = () => Boolean(catalog.orders?.returns_from_history);
 
 /* A withdrawn item can still be sent back, so it stays in the return list and
    leaves the order one. */
@@ -650,6 +656,8 @@ function paintHistory(orders) {
         <div class="order__acts">
           ${edit ? `<button class="btn btn--sm" data-edit="${o.id}">Изменить</button>` : ''}
           ${del ? `<button class="btn btn--sm btn--ghost" data-del="${o.id}">Отменить</button>` : ''}
+          ${o.returnable?.length
+            ? `<button class="btn btn--sm btn--ghost" data-return="${o.id}">Вернуть</button>` : ''}
           <button class="btn btn--sm btn--ghost" data-repeat="${o.id}">Повторить</button>
         </div>
         <div class="order__note">${
@@ -669,6 +677,125 @@ function paintHistory(orders) {
   body.querySelectorAll('[data-repeat]').forEach((b) => {
     b.onclick = () => repeatOrder(byId.get(b.dataset.repeat));
   });
+  body.querySelectorAll('[data-return]').forEach((b) => {
+    b.onclick = () => openReturn(byId.get(b.dataset.return));
+  });
+}
+
+/* ── return out of a past order ──────────────────────────────────────────
+   Only reachable when Настройки puts returns behind the history. The picker
+   is the order's own lines, each capped at what is still returnable, so the
+   customer cannot ask for more back than they received. */
+
+let returning = null;          // { order, picked: Map(id -> qty) }
+
+function openReturn(order) {
+  if (!order?.returnable?.length) return;
+  returning = { order, picked: new Map() };
+  screen = 'return';
+  render();
+}
+
+function closeReturn() {
+  returning = null;
+  screen = 'history';
+  render();
+}
+
+function renderReturn() {
+  const body = document.getElementById('body');
+  if (!body) return;
+  const { order, picked } = returning;
+
+  const total = order.returnable.reduce(
+    (a, l) => a + l.cost * (picked.get(l.id) || 0), 0);
+  const units = [...picked.values()].reduce((a, n) => a + n, 0);
+
+  body.innerHTML = `
+    <div class="editbar">
+      <span>Возврат по заказу #${order.id}</span>
+      <button class="editbar__cancel" id="ret-cancel" type="button">Отмена</button>
+    </div>
+    <div class="list">
+      ${order.returnable.map((l) => {
+        const qty = picked.get(l.id) || 0;
+        return `
+          <div class="item ${qty ? 'item--picked' : ''}">
+            <div class="item__body">
+              <div class="item__name">${esc(l.name)}</div>
+              <div class="item__cost">${l.cost} ₽ · можно вернуть ${l.left} из ${l.qty}</div>
+            </div>
+            <div class="stepper ${qty ? '' : 'stepper--empty'}">
+              <button class="stepper__minus" data-rminus="${l.id}" aria-label="Убрать">−</button>
+              <span class="stepper__qty">${qty}</span>
+              <button class="stepper__plus" data-rplus="${l.id}" aria-label="Добавить"
+                      ${qty >= l.left ? 'disabled' : ''}>+</button>
+            </div>
+          </div>`;
+      }).join('')}
+    </div>`;
+
+  body.querySelectorAll('[data-rplus]').forEach((b) => {
+    b.onclick = () => bumpReturn(Number(b.dataset.rplus), +1);
+  });
+  body.querySelectorAll('[data-rminus]').forEach((b) => {
+    b.onclick = () => bumpReturn(Number(b.dataset.rminus), -1);
+  });
+  body.querySelector('#ret-cancel').onclick = closeReturn;
+
+  paintReturnBar(units, total);
+}
+
+function bumpReturn(id, delta) {
+  const line = returning.order.returnable.find((l) => l.id === id);
+  if (!line) return;
+  const next = Math.max(0, Math.min(line.left, (returning.picked.get(id) || 0) + delta));
+  if (next) returning.picked.set(id, next);
+  else returning.picked.delete(id);
+  renderReturn();
+}
+
+function paintReturnBar(units, total) {
+  document.getElementById('cart')?.remove();
+  if (!units) {
+    document.body.style.paddingBottom = '24px';
+    return;
+  }
+
+  const bar = document.createElement('div');
+  bar.className = 'cart';
+  bar.id = 'cart';
+  bar.innerHTML = `
+    <div class="wrap">
+      <div class="cart__ghead">
+        <span class="cart__gname is-return">Возврат по заказу #${returning.order.id}</span>
+        <span class="cart__gsum">${total} ₽</span>
+      </div>
+      <button class="btn" id="ret-send">Оформить возврат · ${units} шт.</button>
+    </div>`;
+  document.body.append(bar);
+  document.getElementById('ret-send').onclick = sendReturn;
+  document.body.style.paddingBottom = `${bar.offsetHeight + 16}px`;
+}
+
+async function sendReturn() {
+  const btn = document.getElementById('ret-send');
+  btn.disabled = true;
+  const unblock = blockScreen('Отправляем…');
+  try {
+    const items = [...returning.picked.entries()].map(([id, qty]) => ({ id, qty }));
+    const { ok, data } = await post('/api/app/orders', {
+      kind: 'return', source_order_id: returning.order.id, items
+    });
+    if (!ok) {
+      btn.disabled = false;
+      return toast(data.error || 'Не удалось отправить', 'err');
+    }
+    toast('Возврат отправлен');
+    closeReturn();
+  } finally {
+    unblock();
+  }
 }
 
 /* Every path through start() ends with a screen painted, so the splash comes

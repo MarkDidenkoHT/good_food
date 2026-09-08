@@ -23,6 +23,9 @@ export const TZ = 'Europe/Chisinau';
 export const ORDER_DEFAULTS = {
   allow_edit_confirmed: false,
   allow_delete_new: false,
+  // returns are composed freely from the catalogue, or only against a past
+  // order — see returnableFrom() below
+  returns_from_history: false,
   cutoff_enabled: false,
   cutoff_time: '22:00',
   lock_after_cutoff: true,
@@ -188,6 +191,83 @@ export async function priceLines(wanted, { forOrder = false } = {}) {
     lines.push({ id: item.id, name: item.item_name, cost: item.item_cost ?? 0, qty });
   }
   return { lines, total: lines.reduce((acc, l) => acc + l.cost * l.qty, 0), blocked };
+}
+
+/* ── returns against a past order ──────────────────────────────────────
+   Under `returns_from_history` a return is not composed from the catalogue
+   but picked out of an order that was actually placed. What is still
+   returnable is that order's lines less everything already sent back against
+   it, so the same portion cannot be returned twice over several attempts.
+
+   Lines are priced from the order's own snapshot, not from today's catalogue:
+   the customer is sending back what they bought, at what they were charged. */
+
+/* Returns null when the order is not one this company may return against. */
+export async function returnableFrom(orderId, companyId) {
+  const { data: order, error } = await supabase
+    .from('orders')
+    .select('id, company_id, kind, status, items, created_at, service_date')
+    .eq('id', orderId)
+    .maybeSingle();
+  if (error) throw error;
+
+  if (!order) return null;
+  if (String(order.company_id) !== String(companyId)) return null;
+  if (order.kind !== 'order') return null;          // you cannot return a return
+  if (order.status === 'rejected') return null;     // never delivered
+
+  const { data: prior, error: pErr } = await supabase
+    .from('orders')
+    .select('items')
+    .eq('source_order_id', orderId)
+    .neq('status', 'rejected');
+  if (pErr) throw pErr;
+
+  const used = new Map();
+  for (const r of prior || []) {
+    for (const l of Array.isArray(r.items) ? r.items : []) {
+      const id = Number(l.id);
+      used.set(id, (used.get(id) || 0) + (Number(l.qty) || 0));
+    }
+  }
+
+  const lines = (Array.isArray(order.items) ? order.items : []).map((l) => {
+    const id = Number(l.id);
+    const qty = Number(l.qty) || 0;
+    return {
+      id,
+      name: l.name,
+      cost: Number(l.cost) || 0,
+      qty,
+      left: Math.max(0, qty - (used.get(id) || 0))
+    };
+  });
+
+  return { order, lines };
+}
+
+/* Prices a basket against what is still returnable. Refuses rather than
+   trimming: a customer who asked for three back should not silently get one. */
+export function priceReturn(wanted, returnable) {
+  const byId = new Map(returnable.lines.map((l) => [l.id, l]));
+  const lines = [];
+  const over = [];
+
+  for (const w of wanted || []) {
+    const src = byId.get(Number(w?.id));
+    if (!src) continue;                       // not part of that order
+    const qty = Math.max(1, Math.round(Number(w?.qty)) || 1);
+    if (qty > src.left) { over.push(src.name); continue; }
+    lines.push({ id: src.id, name: src.name, cost: src.cost, qty });
+  }
+
+  return { lines, total: lines.reduce((a, l) => a + l.cost * l.qty, 0), over };
+}
+
+export function overMessage(names) {
+  return names.length === 1
+    ? `«${names[0]}» — столько вернуть нельзя`
+    : `Столько вернуть нельзя: ${names.map((n) => `«${n}»`).join(', ')}`;
 }
 
 /* The same sentence from both the create and the edit path. */
