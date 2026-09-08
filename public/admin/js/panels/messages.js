@@ -454,6 +454,9 @@ async function openDetail(id) {
   }
 
   const byStatus = (s) => b.targets.filter((t) => t.status === s).length;
+  // an empty column headed «ошибка» reads as though something went wrong, so
+  // it only appears when Telegram actually said something
+  const anyError = b.targets.some((t) => t.error);
 
   modal({
     title: `Рассылка #${b.id}`,
@@ -485,13 +488,14 @@ async function openDetail(id) {
         <div style="max-height:280px;overflow:auto">
           <table class="table">
             <thead><tr>
-              <th>Пользователь</th><th style="width:130px">Статус</th><th>Ошибка</th>
+              <th>Пользователь</th><th style="width:130px">Статус</th>
+              ${anyError ? '<th>Что ответил Telegram</th>' : ''}
             </tr></thead>
             <tbody>${b.targets.map((t) => `
               <tr>
                 <td>${esc(t.user_name || `#${t.user_id ?? '—'}`)}</td>
                 <td>${esc(TARGET_STATUS[t.status] || t.status)}</td>
-                <td class="hint">${esc(t.error || '')}</td>
+                ${anyError ? `<td class="hint">${esc(t.error || '')}</td>` : ''}
               </tr>`).join('')}</tbody>
           </table>
         </div>
