@@ -2,7 +2,7 @@ import { api } from '../api.js';
 import { h, esc, toast, modal, confirmDialog, onModalCancel } from '../ui.js';
 import { paintIcons } from '../icons.js';
 
-/* Three sub-tabs over one nav slot: позиции, категории, материалы. They share
+/* Three sub-tabs over one nav slot: позиции, категории, сырьё. They share
    a data load because items render category and material names. */
 
 let items = [];
@@ -23,7 +23,7 @@ export const itemsPanel = {
   label: 'Позиции',
   icon: 'items',
   title: 'Позиции',
-  subtitle: 'Каталог, категории и материалы',
+  subtitle: 'Каталог, категории и сырьё',
 
   actions: () => [
     h(`<button class="btn btn--ghost btn--icon" id="cat-refresh" title="Обновить"><span data-icon="refresh"></span></button>`),
@@ -92,7 +92,7 @@ function drawTabs() {
   const defs = [
     ['items', `Позиции (${items.length})`],
     ['categories', `Категории (${categories.length})`],
-    ['materials', `Материалы (${materials.length})`]
+    ['materials', `Сырьё (${materials.length})`]
   ];
   bar.innerHTML = '';
   defs.forEach(([id, label]) => {
@@ -112,7 +112,7 @@ function drawItems(wrap, list) {
     <table class="table">
       <thead><tr>
         <th style="width:60px">ID</th><th style="width:56px"></th><th>Название</th><th style="width:170px">Категория</th>
-        <th style="width:110px">Цена</th><th>Материалы</th><th style="width:110px"></th>
+        <th style="width:110px">Цена</th><th>Сырьё</th><th style="width:110px"></th>
       </tr></thead>
       <tbody>${list.map((i) => `
         <tr>
@@ -204,7 +204,7 @@ function wireRowActions(wrap) {
       const extra = tab === 'categories'
         ? ' Позиции этой категории останутся, но потеряют категорию.'
         : tab === 'materials'
-          ? ' Материал будет убран из всех позиций.'
+          ? ' Сырьё будет убрано из всех позиций.'
           : '';
       confirmDialog('Удалить', `Удалить «${nameOf(row)}»?${extra} Действие необратимо.`, async () => {
         await api.del(`/api/admin/${endpoint()}/${row.id}`);
@@ -253,11 +253,11 @@ function categoryForm(cat) {
 function materialForm(mat) {
   const isNew = !mat;
   modal({
-    title: isNew ? 'Новый материал' : `Изменить: ${mat.material_name}`,
+    title: isNew ? 'Новое сырьё' : `Изменить: ${mat.material_name}`,
     submitLabel: isNew ? 'Создать' : 'Сохранить',
     bodyHTML: `
       <div class="field">
-        <label class="field__label" for="f-mat">Название материала</label>
+        <label class="field__label" for="f-mat">Название сырья</label>
         <input class="input" id="f-mat" name="material_name" required value="${esc(mat?.material_name || '')}">
       </div>
       <div class="field" style="margin-bottom:0">
@@ -270,7 +270,7 @@ function materialForm(mat) {
       const payload = { material_name: d.material_name, cost: d.cost };
       if (isNew) await api.post('/api/admin/materials', payload);
       else await api.patch(`/api/admin/materials/${mat.id}`, payload);
-      toast(isNew ? 'Материал создан' : 'Сохранено');
+      toast(isNew ? 'Сырьё добавлено' : 'Сохранено');
       await load();
     }
   });
@@ -309,7 +309,7 @@ function itemForm(item) {
       </div>
       ${imageFieldHTML(item?.image_path)}
       <div class="field" style="margin-bottom:0;margin-top:16px">
-        <span class="field__label">Материалы</span>
+        <span class="field__label">Сырьё</span>
         ${materials.length
           ? `<div class="picker" id="f-mats">${materials.map((m) => `
               <div class="picker__row">
@@ -323,7 +323,7 @@ function itemForm(item) {
                        ${chosen.has(m.id) ? '' : 'disabled'}>
               </div>`).join('')}</div>
              <p class="hint" id="f-mats-sum"></p>`
-          : `<p class="hint">Материалов пока нет — добавьте их на вкладке «Материалы».</p>`}
+          : `<p class="hint">Сырья пока нет — добавьте его на вкладке «Сырьё».</p>`}
       </div>`,
     onSubmit: async (d) => {
       const picked = [...document.querySelectorAll('#f-mats input[type=checkbox]:checked')]

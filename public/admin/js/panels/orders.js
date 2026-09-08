@@ -111,7 +111,7 @@ function drawToolbar() {
 
     <button class="btn btn--sm" id="b-export-orders" title="Скачать заказы в Excel"><span data-icon="download"></span>Заказы</button>
     <button class="btn btn--sm" id="b-export-returns" title="Скачать возвраты в Excel"><span data-icon="download"></span>Возвраты</button>
-    <button class="btn btn--sm" id="b-export-materials" title="Скачать материалы в Excel"><span data-icon="download"></span>Материалы</button>
+    <button class="btn btn--sm" id="b-export-materials" title="Скачать сырьё в Excel"><span data-icon="download"></span>Сырьё</button>
     <button class="btn btn--sm btn--primary" id="b-send-kitchen">На кухню</button>
 
     <div style="flex:1 1 auto"></div>
@@ -303,10 +303,10 @@ async function exportMaterials() {
 
   try {
     const s = await api.post('/api/admin/orders/summary', { ids });
-    if (!s.materials.length) return toast('Материалы не заданы у позиций', 'err');
+    if (!s.materials.length) return toast('Сырьё не задано у позиций', 'err');
 
     // a workbook splits what the CSV had to stack into one column
-    const materials = [['Материал', 'Количество', 'Себестоимость', 'Сумма']];
+    const materials = [['Сырьё', 'Количество', 'Себестоимость', 'Сумма']];
     s.materials.forEach((m) => materials.push([m.name, m.qty, m.cost, m.total]));
     materials.push([]);
     materials.push(['Итого', '', '', s.materials_total]);
@@ -314,11 +314,11 @@ async function exportMaterials() {
     const items = [['Позиция', 'К приготовлению']];
     s.items.forEach((i) => items.push([i.name, i.qty]));
 
-    downloadXlsx('materialy', [
-      { name: 'Материалы', rows: materials },
+    downloadXlsx('syryo', [
+      { name: 'Сырьё', rows: materials },
       { name: 'Позиции', rows: items }
     ]);
-    toast(`Материалов: ${s.materials.length}`);
+    toast(`Позиций сырья: ${s.materials.length}`);
   } catch (e) {
     toast(e.message, 'err');
   }

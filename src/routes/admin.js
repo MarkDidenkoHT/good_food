@@ -415,10 +415,10 @@ adminRouter.post('/orders/send-kitchen', async (req, res) => {
     '<b>Позиции</b>',
     ...summary.items.map((i) => `• ${tgEsc(i.name)} — ${i.qty} шт.`),
     '',
-    '<b>Материалы</b>',
+    '<b>Сырьё</b>',
     ...summary.materials.map((m) => `• ${tgEsc(m.name)} — ${m.qty} шт.`),
     '',
-    `Себестоимость материалов: <b>${summary.materials_total} ₽</b>`,
+    `Себестоимость сырья: <b>${summary.materials_total} ₽</b>`,
     `<i>отправлено ${when}</i>`
   ].join('\n');
 

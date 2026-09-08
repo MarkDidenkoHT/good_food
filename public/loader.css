@@ -8,24 +8,27 @@
    Scaling happens on the row as a whole rather than on each measurement, so
    a small loader animates identically to a large one. */
 
+/* `--s` scales every measurement below, rather than a transform on the row:
+   a transform leaves the layout box at full size, so a shrunken loader would
+   still reserve the space of a big one and shove its neighbours aside. At
+   --s: 1 every calc() below resolves to the original pixel value. */
 .sushi {
-  --sushi-scale: 1;
+  --s: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: calc(10px * var(--s));
 }
 
-/* The rolls jump above their own boxes, so the row needs headroom or the
-   tops clip against whatever contains it. */
+/* The rolls jump clear of their own boxes, so the row carries headroom for
+   the top of the arc — without it the tops clip against whatever contains
+   the loader. */
 .sushi__row {
   display: flex;
-  gap: 14px;
+  gap: calc(14px * var(--s));
   align-items: flex-end;
-  height: calc(104px * var(--sushi-scale));
-  transform: scale(var(--sushi-scale));
-  transform-origin: center bottom;
+  height: calc(104px * var(--s));
 }
 
 .sushi__label {
@@ -35,14 +38,14 @@
   letter-spacing: .02em;
 }
 
-.sushi--sm { --sushi-scale: .48; }
-.sushi--md { --sushi-scale: .7; }
+.sushi--sm { --s: .45; }
+.sushi--md { --s: .7; }
 
 /* ── one roll ───────────────────────────────────────────────── */
 
 .roll-wrap {
-  width: 54px;
-  height: 90px;
+  width: calc(54px * var(--s));
+  height: calc(90px * var(--s));
   position: relative;
   display: flex;
   align-items: flex-end;
@@ -50,8 +53,8 @@
 }
 
 .roll {
-  width: 54px;
-  height: 54px;
+  width: calc(54px * var(--s));
+  height: calc(54px * var(--s));
   border-radius: 50%;
   position: relative;
   flex-shrink: 0;
@@ -62,8 +65,8 @@
   position: absolute;
   bottom: 0;
   left: 50%;
-  width: 44px;
-  height: 10px;
+  width: calc(44px * var(--s));
+  height: calc(10px * var(--s));
   background: rgba(0, 0, 0, 0.4);
   border-radius: 50%;
   animation: sushi-shadow 1.7s cubic-bezier(0.45, 0, 0.55, 1) infinite;
@@ -80,13 +83,15 @@
 .roll-wrap:nth-child(5) .roll,
 .roll-wrap:nth-child(5) .shadow { animation-delay: 0.68s; }
 
+/* The hop travels with the roll size, so a small loader arcs proportionally
+   rather than launching itself out of its container. */
 @keyframes sushi-jump {
   0%   { transform: translateY(0) scale(1, 1) rotate(0deg); }
-  10%  { transform: translateY(4px) scale(1.15, 0.8) rotate(0deg); }
-  35%  { transform: translateY(-46px) scale(0.92, 1.1) rotate(170deg); }
-  55%  { transform: translateY(-46px) scale(0.92, 1.1) rotate(180deg); }
+  10%  { transform: translateY(calc(4px * var(--s))) scale(1.15, 0.8) rotate(0deg); }
+  35%  { transform: translateY(calc(-46px * var(--s))) scale(0.92, 1.1) rotate(170deg); }
+  55%  { transform: translateY(calc(-46px * var(--s))) scale(0.92, 1.1) rotate(180deg); }
   80%  { transform: translateY(0) scale(1, 1) rotate(360deg); }
-  90%  { transform: translateY(4px) scale(1.15, 0.8) rotate(360deg); }
+  90%  { transform: translateY(calc(4px * var(--s))) scale(1.15, 0.8) rotate(360deg); }
   100% { transform: translateY(0) scale(1, 1) rotate(360deg); }
 }
 
@@ -105,23 +110,25 @@
   height: 100%;
   border-radius: 50%;
   background: #1c1c1c;
-  border: 2px solid #171717;
+  border: max(1px, calc(2px * var(--s))) solid #171717;
   box-sizing: border-box;
   position: relative;
   overflow: hidden;
 }
 
+/* max(1px, …) on the two rims: below a pixel they thin out to nothing and a
+   small roll loses the seaweed edge that makes it read as sushi. */
 .nori {
   position: absolute;
-  inset: 2px;
+  inset: calc(2px * var(--s));
   border-radius: 50%;
-  border: 7px solid #1a2b1e;
+  border: max(2px, calc(7px * var(--s))) solid #1a2b1e;
   box-sizing: border-box;
 }
 
 .rice {
   position: absolute;
-  inset: 9px;
+  inset: max(3px, calc(9px * var(--s)));
   border-radius: 50%;
   background: #f3ecd8;
   overflow: hidden;
@@ -131,8 +138,8 @@
 .rice::after {
   content: '';
   position: absolute;
-  width: 5px;
-  height: 5px;
+  width: calc(5px * var(--s));
+  height: calc(5px * var(--s));
   border-radius: 50%;
   background: #ffffff;
 }
@@ -142,7 +149,7 @@
 
 .topping {
   position: absolute;
-  inset: 4px 4px 46% 4px;
+  inset: calc(4px * var(--s)) calc(4px * var(--s)) 46% calc(4px * var(--s));
   border-radius: 50% 50% 40% 40% / 60% 60% 30% 30%;
   overflow: hidden;
 }
@@ -207,7 +214,7 @@
 
 .cucumber .topping {
   background: #f3ecd8;
-  inset: 4px 4px 40% 4px;
+  inset: calc(4px * var(--s)) calc(4px * var(--s)) 40% calc(4px * var(--s));
 }
 .cucumber .topping::before {
   background-image: none;
