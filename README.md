@@ -99,6 +99,26 @@ on those numbers. A cancellation marks the old post instead of removing it.
 
 Apply `db/migrations/order_edit_cutoff.sql` before deploying this.
 
+## Withdrawing an item
+
+`items.available` takes a position off the order list without deleting it.
+Deleting would break the record: order lines keep their own priced snapshot,
+but the catalogue is also what a **return** is picked from, so something no
+longer sold must still be selectable to send back.
+
+`false` therefore stops exactly one thing — placing a *new* order:
+
+- **Заказ** tab hides it; **Возврат** tab still lists it
+- history is unaffected — those lines are snapshots
+- `POST /api/app/orders` and `PATCH /api/app/orders/:id` re-check on the way
+  in and answer **409** naming the item, so a basket filled before the switch
+  cannot slip through; the mini-app then re-reads the catalogue and drops the
+  item from the order basket
+- «Повторить» on an old order skips withdrawn lines
+
+Toggle it from the row pill in **Позиции** (one click, no dialog — it is
+reversible) or from the item form. Apply `db/migrations/009_item_available.sql`.
+
 ## Broadcasts (Сообщения)
 
 An admin composes one message — up to **1000 characters**, optionally with a

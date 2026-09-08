@@ -164,10 +164,24 @@ async function submitJoin(code) {
   else toast(message, 'err');
 }
 
+/* Re-read the catalog after the server refused something. Both the rules and
+   the item list may have moved on since the app was opened, and the screen
+   has to stop offering whatever would just be refused again. */
 async function refreshRules() {
   try {
-    catalog.orders = (await get('/api/app/catalog')).orders;
-  } catch { /* leave the last known rules in place */ }
+    catalog = await get('/api/app/catalog');
+    pruneOrderCart();
+  } catch { /* leave the last known catalog in place */ }
+}
+
+/* An item withdrawn while the basket was open leaves the order basket. The
+   return basket keeps it — sending one back is still allowed. */
+function pruneOrderCart() {
+  for (const id of [...carts.order.keys()]) {
+    const it = catalog.items.find((x) => x.id === id);
+    if (!it || orderable(it)) continue;
+    carts.order.delete(id);
+  }
 }
 
 async function openApp() {
@@ -231,12 +245,19 @@ function paintTabCounts() {
   });
 }
 
+/* A withdrawn item can still be sent back, so it stays in the return list and
+   leaves the order one. */
+const orderable = (it) => it.available !== false;
+const forKind = () => (kind === 'return' ? catalog.items : catalog.items.filter(orderable));
+
 function renderCatalog() {
   const body = document.getElementById('body');
-  const items = catalog.items;
+  const items = forKind();
 
   if (!items.length) {
-    body.innerHTML = `${blockedBanner()}${editingBanner()}<div class="empty">Каталог пуст.</div>`;
+    body.innerHTML = `${blockedBanner()}${editingBanner()}<div class="empty">${
+      catalog.items.length ? 'Сейчас нечего заказать.' : 'Каталог пуст.'
+    }</div>`;
     body.querySelector('#edit-cancel')?.addEventListener('click', cancelEdit);
     return renderCart();
   }
@@ -359,16 +380,22 @@ function repeatOrder(order) {
   if (editing) return toast('Сначала завершите изменение заказа', 'err');
 
   const basket = carts[order.kind];
+  const wantsOrder = order.kind !== 'return';
   let missing = 0;
   for (const line of Array.isArray(order.items) ? order.items : []) {
     const id = Number(line.id);
-    // the catalog may have moved on since; a line that is gone cannot be repriced
-    if (!catalog.items.some((i) => i.id === id)) { missing++; continue; }
+    const it = catalog.items.find((i) => i.id === id);
+    // the catalog may have moved on since: a line that is gone cannot be
+    // repriced, and one that is withdrawn cannot be ordered again — though it
+    // can still be returned
+    if (!it || (wantsOrder && !orderable(it))) { missing++; continue; }
     basket.set(id, Math.min(999, (basket.get(id) || 0) + (Number(line.qty) || 1)));
   }
 
-  if (!basket.size) return toast('Этих позиций больше нет в каталоге', 'err');
-  if (missing) toast(`${missing} поз. больше нет в каталоге`, 'err');
+  if (!basket.size) {
+    return toast(wantsOrder ? 'Эти позиции больше не заказать' : 'Этих позиций больше нет в каталоге', 'err');
+  }
+  if (missing) toast(`${missing} поз. больше недоступно`, 'err');
 
   kind = order.kind;
   screen = 'catalog';

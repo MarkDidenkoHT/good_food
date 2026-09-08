@@ -90,7 +90,7 @@ function buildNav() {
 }
 
 function wireChrome() {
-  $('#nav-toggle').onclick = toggleCompact;
+  // one control for the nav width, at the foot of the nav itself
   $('#compact-btn').onclick = toggleCompact;
   $('#theme-btn').onclick = () =>
     setChrome({ theme: prefs.theme === 'dark' ? 'light' : 'dark' });

@@ -722,6 +722,8 @@ function pickItem(b = {}) {
   if ('item_category' in b) out.item_category = b.item_category?.trim() || null;
   if ('item_cost' in b) out.item_cost = toMoney(b.item_cost);
   if ('image_path' in b) out.image_path = b.image_path?.trim() || null;
+  // false takes the item off the order list; it stays orderable-for-return
+  if ('available' in b) out.available = b.available !== false;
   if ('materials' in b) {
     // store a {id, name} snapshot so an item still reads correctly if a
     // material is later renamed or removed

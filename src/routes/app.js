@@ -4,7 +4,8 @@ import { requireUser } from '../lib/auth.js';
 import { sendNewOrderNotice, sendOrderEditedNotice, markOrderDeleted } from '../lib/notices.js';
 import { signedUrlMap } from '../lib/storage.js';
 import { orderSettings, editDeadline, canEdit, canDelete, editableStatuses,
-         orderingWindow, serviceDateFor, priceLines, TZ } from '../lib/orders.js';
+         orderingWindow, serviceDateFor, priceLines, blockedMessage, TZ }
+  from '../lib/orders.js';
 
 export const appRouter = Router();
 appRouter.use(requireUser);
@@ -15,7 +16,8 @@ appRouter.use(requireUser);
 appRouter.get('/catalog', async (req, res) => {
   const [items, categories, settings, orders] = await Promise.all([
     supabase.from('items')
-      .select('id, item_name, item_category, item_cost, image_path').order('item_name'),
+      .select('id, item_name, item_category, item_cost, image_path, available')
+      .order('item_name'),
     supabase.from('categories').select('id, category_name, image_path').order('category_name'),
     supabase.from('app_settings').select('key, value').eq('key', 'catalog').maybeSingle(),
     orderSettings()
@@ -34,10 +36,14 @@ appRouter.get('/catalog', async (req, res) => {
     ? await signedUrlMap([...rows, ...cats].map((r) => r.image_path))
     : {};
 
+  // Withdrawn items ship too: the mini-app hides them from the order list but
+  // still offers them for a return.
   res.json({
     show_images: showImages,
-    items: rows.map(({ image_path, ...i }) => ({
-      ...i, image: showImages ? urls[image_path] || null : null
+    items: rows.map(({ image_path, available, ...i }) => ({
+      ...i,
+      available: available !== false,
+      image: showImages ? urls[image_path] || null : null
     })),
     categories: cats.map((c) => ({
       name: c.category_name,
@@ -107,14 +113,16 @@ appRouter.post('/orders', async (req, res) => {
   if (!wanted.length) return res.status(400).json({ error: 'Корзина пуста' });
 
   // Price the order from the database, never from the client: the browser
-  // sends ids and quantities, nothing about cost.
+  // sends ids and quantities, nothing about cost. Availability is checked
+  // here too — a basket may have been filled before an item was withdrawn.
   let priced;
   try {
-    priced = await priceLines(wanted);
+    priced = await priceLines(wanted, { forOrder: kind === 'order' });
   } catch (e) {
     return dbError(res, e, 500);
   }
-  const { lines, total } = priced;
+  const { lines, total, blocked } = priced;
+  if (blocked.length) return res.status(409).json({ error: blockedMessage(blocked) });
   if (!lines.length) return res.status(400).json({ error: 'Позиции не найдены' });
 
   const { data: order, error: insErr } = await supabase
@@ -166,11 +174,12 @@ appRouter.patch('/orders/:id', async (req, res) => {
 
   let priced;
   try {
-    priced = await priceLines(wanted);
+    priced = await priceLines(wanted, { forOrder: order.kind !== 'return' });
   } catch (e) {
     return dbError(res, e, 500);
   }
-  const { lines, total } = priced;
+  const { lines, total, blocked } = priced;
+  if (blocked.length) return res.status(409).json({ error: blockedMessage(blocked) });
   if (!lines.length) return res.status(400).json({ error: 'Позиции не найдены' });
 
   const patch = {

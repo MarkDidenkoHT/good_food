@@ -182,6 +182,17 @@ body.nav-compact .nav__list { padding: 10px 8px; }
         padding: 3px 10px; border-radius: var(--r-pill); background: var(--surface-2); color: var(--ink-2); }
 .pill--on  { background: #4caf5024; color: var(--ok); }
 .pill--off { background: #ff525224; color: var(--danger); }
+
+/* A pill that is also the control that changes it. */
+.pill--btn { border: 0; cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; }
+.pill--btn:hover { filter: brightness(.94); }
+.pill--btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+/* A withdrawn item stays fully legible — it is still edited and still
+   returned — but reads as set aside from the ones on sale. */
+.row--muted > td { opacity: .62; }
+.row--muted > td:has(.pill--btn) { opacity: 1; }
+
 .row-actions { display: flex; gap: 6px; justify-content: flex-end; }
 
 /* ── placeholder / empty ────────────────────────────────────── */

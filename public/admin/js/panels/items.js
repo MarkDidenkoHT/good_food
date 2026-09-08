@@ -112,16 +112,24 @@ function drawItems(wrap, list) {
     <table class="table">
       <thead><tr>
         <th style="width:60px">ID</th><th style="width:56px"></th><th>Название</th><th style="width:170px">Категория</th>
+        <th style="width:130px">Заказ</th>
         <th style="width:110px">Цена</th><th>Сырьё</th><th style="width:110px"></th>
       </tr></thead>
       <tbody>${list.map((i) => `
-        <tr>
+        <tr${i.available === false ? ' class="row--muted"' : ''}>
           <td class="num">${i.id}</td>
           <td>${thumb(i.image_path)}</td>
           <td style="font-weight:700">${esc(i.item_name || '—')}</td>
           <td>${i.item_category
             ? `<span class="pill">${esc(i.item_category)}</span>`
             : `<span class="pill pill--off">без категории</span>`}</td>
+          <td>
+            <button class="pill pill--btn ${i.available === false ? 'pill--off' : 'pill--on'}"
+                    data-avail="${i.id}"
+                    title="${i.available === false ? 'Вернуть в продажу' : 'Снять с продажи'}">
+              ${i.available === false ? 'Снята' : 'В продаже'}
+            </button>
+          </td>
           <td class="num">${money(i.item_cost)}</td>
           <td>${(Array.isArray(i.materials) ? i.materials : []).length
             ? i.materials.map((m) => `<span class="chip">${esc(m.name)}${
@@ -213,6 +221,24 @@ function wireRowActions(wrap) {
       });
     };
   });
+
+  // One click, no dialog: this is reversible and gets used often.
+  wrap.querySelectorAll('[data-avail]').forEach((b) => {
+    b.onclick = () => toggleAvailable(items.find((r) => String(r.id) === b.dataset.avail));
+  });
+}
+
+async function toggleAvailable(item) {
+  if (!item) return;
+  const next = item.available === false;
+  try {
+    await api.patch(`/api/admin/items/${item.id}`, { available: next });
+    toast(next ? `«${item.item_name}» снова в продаже`
+               : `«${item.item_name}» снята с продажи`);
+    await load();
+  } catch (e) {
+    toast(e.message, 'err');
+  }
 }
 
 /* ── forms ──────────────────────────────────────────────────── */
@@ -307,6 +333,18 @@ function itemForm(item) {
         <input class="input" id="f-item-cost" name="item_cost" type="number" min="0" step="1"
                value="${item?.item_cost ?? ''}" placeholder="0">
       </div>
+      <div class="field">
+        <span class="field__label">Доступность</span>
+        <div class="seg" id="f-item-avail">
+          <button type="button" data-v="on"  aria-pressed="${item?.available !== false}">В продаже</button>
+          <button type="button" data-v="off" aria-pressed="${item?.available === false}">Снята</button>
+        </div>
+        <!-- the segment writes here so the modal's FormData carries it -->
+        <input type="hidden" name="available" id="f-item-avail-v"
+               value="${item?.available === false ? 'off' : 'on'}">
+        <p class="hint">Снятую позицию нельзя заказать. Она остаётся в истории
+           заказов и доступна для возврата.</p>
+      </div>
       ${imageFieldHTML(item?.image_path)}
       <div class="field" style="margin-bottom:0;margin-top:16px">
         <span class="field__label">Сырьё</span>
@@ -338,6 +376,7 @@ function itemForm(item) {
         item_category: d.item_category || null,
         item_cost: d.item_cost,
         image_path: d.image_path || null,
+        available: d.available !== 'off',
         materials: picked
       };
       if (isNew) await api.post('/api/admin/items', payload);
@@ -350,6 +389,17 @@ function itemForm(item) {
   imageFolder = 'items';
   const img = wireImageField(item?.image_path);
   onModalCancel(img.cleanup);
+
+  const availSeg = document.getElementById('f-item-avail');
+  const availVal = document.getElementById('f-item-avail-v');
+  availSeg?.querySelectorAll('button').forEach((b) => {
+    b.onclick = () => {
+      availVal.value = b.dataset.v;
+      availSeg.querySelectorAll('button').forEach((x) => {
+        x.setAttribute('aria-pressed', String(x === b));
+      });
+    };
+  });
 
   // running total of the picked materials — a sanity check against the price
   const box = document.getElementById('f-mats');

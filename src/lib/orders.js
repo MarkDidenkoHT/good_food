@@ -162,21 +162,37 @@ export function orderingWindow(settings, now = new Date()) {
 /* Prices the basket from the database — the browser sends ids and quantities
    and nothing about cost, on an edit and a repeat exactly as on a first
    submit. */
-export async function priceLines(wanted) {
+/* `forOrder` applies the availability rule: an item taken off the list can
+   still be returned, so only a new order is refused. Blocked names come back
+   rather than being dropped quietly — a basket filled before the item was
+   switched off has to say why it cannot be sent. */
+export async function priceLines(wanted, { forOrder = false } = {}) {
   const ids = [...new Set((wanted || []).map((l) => Number(l?.id)).filter(Number.isFinite))];
-  if (!ids.length) return { lines: [], total: 0 };
+  if (!ids.length) return { lines: [], total: 0, blocked: [] };
 
   const { data: known, error } = await supabase
-    .from('items').select('id, item_name, item_cost').in('id', ids);
+    .from('items').select('id, item_name, item_cost, available').in('id', ids);
   if (error) throw error;
 
   const byId = new Map((known || []).map((i) => [i.id, i]));
   const lines = [];
+  const blocked = [];
   for (const line of wanted) {
     const item = byId.get(Number(line?.id));
     if (!item) continue;
+    if (forOrder && item.available === false) {
+      blocked.push(item.item_name || `#${item.id}`);
+      continue;
+    }
     const qty = Math.min(999, Math.max(1, Math.round(Number(line?.qty)) || 1));
     lines.push({ id: item.id, name: item.item_name, cost: item.item_cost ?? 0, qty });
   }
-  return { lines, total: lines.reduce((acc, l) => acc + l.cost * l.qty, 0) };
+  return { lines, total: lines.reduce((acc, l) => acc + l.cost * l.qty, 0), blocked };
+}
+
+/* The same sentence from both the create and the edit path. */
+export function blockedMessage(names) {
+  return names.length === 1
+    ? `«${names[0]}» больше не принимается к заказу`
+    : `Эти позиции больше не принимаются к заказу: ${names.map((n) => `«${n}»`).join(', ')}`;
 }
