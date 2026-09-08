@@ -1,9 +1,18 @@
 import { supabase } from './supabase.js';
 
 /* When a customer may still change an order, and whether the shop is taking
-   new ones at all. One cutoff time a day: before it, an order nobody has
-   approved yet is freely editable; after it the day's orders have gone into
-   production and are closed.
+   new ones at all. Two independent questions, settled by two groups of
+   settings:
+
+   Permissions — may a customer touch an order the kitchen has already
+   approved (`allow_edit_confirmed`), and may they cancel one nobody has
+   approved yet (`allow_delete_new`).
+
+   The daily time limit — off by default. Switched on it names one wall-clock
+   time (`cutoff_time`) that can close editing for the day
+   (`lock_after_cutoff`) and decides what becomes of orders placed after it
+   (`after_cutoff`): they either roll onto tomorrow's list or are refused
+   until the shop reopens (`resume_time`).
 
    Both the mini-app (which greys its buttons out) and the endpoints (which
    refuse) read the answer from here, so an app left open since before the
@@ -12,11 +21,13 @@ import { supabase } from './supabase.js';
 export const TZ = 'Europe/Chisinau';
 
 export const ORDER_DEFAULTS = {
+  allow_edit_confirmed: false,
+  allow_delete_new: false,
   cutoff_enabled: false,
   cutoff_time: '22:00',
+  lock_after_cutoff: true,
   after_cutoff: 'next_day',   // next_day | block
-  resume_time: '08:00',
-  allow_delete_new: false
+  resume_time: '08:00'
 };
 
 export async function orderSettings() {
@@ -95,22 +106,32 @@ export function serviceDateFor(settings, now = new Date()) {
   return localDate(new Date(cutoff.getTime() + 24 * 3600 * 1000));
 }
 
-/* Editing closes at the cutoff of the day the order counts for. With no
-   cutoff configured there is no deadline — only approval closes an order. */
+/* Editing closes at the cutoff of the day the order counts for — but only
+   when the time limit is set to lock the day. Without one there is no
+   deadline, and what an order allows depends on its status alone. */
 export function editDeadline(order, settings) {
-  if (!settings?.cutoff_enabled) return null;
+  if (!settings?.cutoff_enabled || settings.lock_after_cutoff === false) return null;
   const day = order?.service_date || localDate(new Date(order.created_at));
   return timeOn(day, settings.cutoff_time);
 }
 
+/* Which statuses a customer may still edit. Rejected is always final: there
+   is nothing left to change. */
+export function editableStatuses(settings) {
+  return settings?.allow_edit_confirmed ? ['new', 'confirmed'] : ['new'];
+}
+
 export function canEdit(order, settings, now = new Date()) {
-  if (order.status !== 'new') return false;      // approved or rejected is final
+  if (!editableStatuses(settings).includes(order.status)) return false;
   const deadline = editDeadline(order, settings);
   return !deadline || now < deadline;
 }
 
+/* Cancelling is only ever offered before approval, however editing is set. */
 export function canDelete(order, settings, now = new Date()) {
-  return Boolean(settings?.allow_delete_new) && canEdit(order, settings, now);
+  return Boolean(settings?.allow_delete_new) &&
+    order.status === 'new' &&
+    canEdit(order, settings, now);
 }
 
 /* Whether new orders are being accepted right now. Only 'block' ever closes

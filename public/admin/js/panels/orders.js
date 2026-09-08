@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { h, esc, toast, confirmDialog, fmtDate } from '../ui.js';
 import { paintIcons } from '../icons.js';
+import { downloadXlsx } from '../xlsx.js';
 
 /* Only the date range costs a request. Status, type and company narrow the
    rows already in memory, so those dropdowns react instantly. */
@@ -105,9 +106,9 @@ function drawToolbar() {
 
     <span class="toolbar__sep"></span>
 
-    <button class="btn btn--sm" id="b-export-orders">Заказы CSV</button>
-    <button class="btn btn--sm" id="b-export-returns">Возвраты CSV</button>
-    <button class="btn btn--sm" id="b-export-materials">Материалы CSV</button>
+    <button class="btn btn--sm" id="b-export-orders" title="Скачать заказы в Excel"><span data-icon="download"></span>Заказы</button>
+    <button class="btn btn--sm" id="b-export-returns" title="Скачать возвраты в Excel"><span data-icon="download"></span>Возвраты</button>
+    <button class="btn btn--sm" id="b-export-materials" title="Скачать материалы в Excel"><span data-icon="download"></span>Материалы</button>
     <button class="btn btn--sm btn--primary" id="b-send-kitchen">На кухню</button>
 
     <div style="flex:1 1 auto"></div>
@@ -151,6 +152,8 @@ function drawToolbar() {
   bar.querySelector('#b-export-returns').onclick = () => exportOrders('return');
   bar.querySelector('#b-export-materials').onclick = exportMaterials;
   bar.querySelector('#b-send-kitchen').onclick = sendToKitchen;
+
+  paintIcons(bar);
 }
 
 function visible() {
@@ -261,25 +264,6 @@ function applyFocus() {
 
 /* ── export / kitchen ───────────────────────────────────────── */
 
-/* Excel on a Russian locale reads ';' as the separator and needs the BOM to
-   detect UTF-8; without both, Cyrillic arrives as mojibake in one column. */
-function downloadCsv(name, rowsOut) {
-  const body = rowsOut
-    .map((r) => r.map((cell) => {
-      const v = String(cell ?? '');
-      return /[";\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
-    }).join(';'))
-    .join('\r\n');
-
-  const blob = new Blob([`﻿${body}`], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${name}_${new Date().toISOString().slice(0, 10)}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 function exportOrders(kind) {
   const list = visible().filter((o) => o.kind === kind);
   if (!list.length) {
@@ -301,7 +285,8 @@ function exportOrders(kind) {
                 STATUS[o.status]?.[0] || o.status, fmtDate(o.created_at)]);
     }
   }
-  downloadCsv(kind === 'return' ? 'vozvraty' : 'zakazy', out);
+  downloadXlsx(kind === 'return' ? 'vozvraty' : 'zakazy', out,
+               kind === 'return' ? 'Возвраты' : 'Заказы');
   toast(`Выгружено: ${list.length}`);
 }
 
@@ -317,15 +302,19 @@ async function exportMaterials() {
     const s = await api.post('/api/admin/orders/summary', { ids });
     if (!s.materials.length) return toast('Материалы не заданы у позиций', 'err');
 
-    const out = [['Материал', 'Количество', 'Себестоимость', 'Сумма']];
-    s.materials.forEach((m) => out.push([m.name, m.qty, m.cost, m.total]));
-    out.push([]);
-    out.push(['Итого', '', '', s.materials_total]);
-    out.push([]);
-    out.push(['Позиция', 'К приготовлению']);
-    s.items.forEach((i) => out.push([i.name, i.qty]));
+    // a workbook splits what the CSV had to stack into one column
+    const materials = [['Материал', 'Количество', 'Себестоимость', 'Сумма']];
+    s.materials.forEach((m) => materials.push([m.name, m.qty, m.cost, m.total]));
+    materials.push([]);
+    materials.push(['Итого', '', '', s.materials_total]);
 
-    downloadCsv('materialy', out);
+    const items = [['Позиция', 'К приготовлению']];
+    s.items.forEach((i) => items.push([i.name, i.qty]));
+
+    downloadXlsx('materialy', [
+      { name: 'Материалы', rows: materials },
+      { name: 'Позиции', rows: items }
+    ]);
     toast(`Материалов: ${s.materials.length}`);
   } catch (e) {
     toast(e.message, 'err');

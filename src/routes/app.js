@@ -3,8 +3,8 @@ import { supabase, dbError } from '../lib/supabase.js';
 import { requireUser } from '../lib/auth.js';
 import { sendNewOrderNotice, sendOrderEditedNotice, markOrderDeleted } from '../lib/notices.js';
 import { signedUrlMap } from '../lib/storage.js';
-import { orderSettings, editDeadline, canEdit, canDelete, orderingWindow, serviceDateFor,
-         priceLines, TZ } from '../lib/orders.js';
+import { orderSettings, editDeadline, canEdit, canDelete, editableStatuses,
+         orderingWindow, serviceDateFor, priceLines, TZ } from '../lib/orders.js';
 
 export const appRouter = Router();
 appRouter.use(requireUser);
@@ -57,6 +57,7 @@ function orderRules(settings, now = new Date()) {
     cutoff_enabled: Boolean(settings.cutoff_enabled),
     cutoff_time: settings.cutoff_time,
     allow_delete_new: Boolean(settings.allow_delete_new),
+    allow_edit_confirmed: Boolean(settings.allow_edit_confirmed),
     ordering_blocked: window.blocked,
     resumes_at: window.resumes_at?.toISOString() || null,
     service_date: window.service_date,
@@ -135,11 +136,12 @@ appRouter.post('/orders', async (req, res) => {
   res.status(201).json(order);
 });
 
-/* Edit an order the customer already sent. Free while nobody has approved it
-   and today's cutoff has not passed — an app opened before the cutoff gets the
-   same answer as one opened after it, because the check is here and not in the
-   browser. The basket is re-priced from the catalog, so an edit can never
-   carry a stale or invented price. */
+/* Edit an order the customer already sent. Allowed while the status is one
+   Настройки still opens (always «Новый», and «Подтверждён» when editing
+   approved orders is switched on) and today's cutoff has not passed — an app
+   opened before the cutoff gets the same answer as one opened after it,
+   because the check is here and not in the browser. The basket is re-priced
+   from the catalog, so an edit can never carry a stale or invented price. */
 appRouter.patch('/orders/:id', async (req, res) => {
   const settings = await orderSettings();
 
@@ -185,7 +187,8 @@ appRouter.patch('/orders/:id', async (req, res) => {
     .from('orders')
     .update(patch)
     .eq('id', order.id)
-    .eq('status', 'new')          // lost the race with an admin decision
+    // lost the race with an admin decision that closed the order
+    .in('status', editableStatuses(settings))
     .select().single();
   if (error) return dbError(res, error);
 
@@ -228,7 +231,10 @@ appRouter.delete('/orders/:id', async (req, res) => {
 /* Say which of the two closed the order, since the customer can do something
    about neither but should not be left guessing. */
 function closedMessage(order, settings) {
-  if (order.status !== 'new') return 'Заказ уже обработан';
+  if (order.status === 'rejected') return 'Заказ отклонён';
+  if (order.status !== 'new' && !settings?.allow_edit_confirmed) {
+    return 'Заказ уже подтверждён — изменить нельзя';
+  }
   const deadline = editDeadline(order, settings);
   return `Изменение закрыто в ${hhmm(deadline)} — заказ уже в работе`;
 }

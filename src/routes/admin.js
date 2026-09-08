@@ -483,16 +483,18 @@ adminRouter.put('/settings/notifications', async (req, res) => {
   res.json({ ok: true, value });
 });
 
-/* Until when an unapproved order stays editable, what happens to orders sent
-   after that, and whether cancelling is offered at all. The mini-app reads the
-   same row to decide what to draw; the API enforces it. */
+/* Two groups in one row: what a customer is allowed to do to their own order,
+   and the daily time limit that can close the day and divert late orders. The
+   mini-app reads the same row to decide what to draw; the API enforces it. */
 adminRouter.put('/settings/orders', async (req, res) => {
   const { data: current } = await supabase
     .from('app_settings').select('value').eq('key', 'orders').maybeSingle();
   const value = { ...SETTING_DEFAULTS.orders, ...(current?.value || {}) };
 
-  if ('cutoff_enabled' in req.body) value.cutoff_enabled = !!req.body.cutoff_enabled;
-  if ('allow_delete_new' in req.body) value.allow_delete_new = !!req.body.allow_delete_new;
+  for (const key of ['allow_edit_confirmed', 'allow_delete_new',
+                     'cutoff_enabled', 'lock_after_cutoff']) {
+    if (key in req.body) value[key] = !!req.body[key];
+  }
 
   for (const key of ['cutoff_time', 'resume_time']) {
     if (!(key in req.body)) continue;

@@ -20,7 +20,10 @@ const view = document.getElementById('view');
 let me = null;
 let catalog = {
   items: [], categories: [], group_by_category: false, show_images: false,
-  orders: { cutoff_enabled: false, allow_delete_new: false, ordering_blocked: false }
+  orders: {
+    cutoff_enabled: false, allow_delete_new: false,
+    allow_edit_confirmed: false, ordering_blocked: false
+  }
 };
 let kind = 'order';                 // order | return
 let screen = 'catalog';             // catalog | history
@@ -568,7 +571,11 @@ const clock = (iso) => new Date(iso).toLocaleTimeString('ru-RU',
   { hour: '2-digit', minute: '2-digit' });
 
 function deadlineNote(o) {
-  if (!o.editable_until) return 'Можно изменить, пока заказ не подтверждён';
+  if (!o.editable_until) {
+    return o.status === 'new' && !catalog.orders?.allow_edit_confirmed
+      ? 'Можно изменить, пока заказ не подтверждён'
+      : 'Заказ можно изменить';
+  }
   const sameDay = new Date(o.editable_until).toDateString() === new Date().toDateString();
   return `Можно изменить до ${clock(o.editable_until)}${sameDay ? '' : ' завтра'}`;
 }
@@ -599,8 +606,8 @@ function paintHistory(orders) {
         </div>
         <div class="order__note">${
           edit ? esc(deadlineNote(o))
-          : o.status === 'new' ? 'Заказ уже в работе — изменить нельзя'
-          : ''}</div>
+          : o.status === 'rejected' ? ''
+          : 'Заказ уже в работе — изменить нельзя'}</div>
       </div>`;
   }).join('');
 

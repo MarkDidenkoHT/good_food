@@ -2,16 +2,20 @@ import { api } from '../api.js';
 import { h, esc, toast } from '../ui.js';
 import { paintIcons } from '../icons.js';
 
-/* First real setting: how the mini-app lists the catalog. Grouping by
-   category only works if every item has one, so the save is allowed to fail
-   with the list of offenders and we render it inline. */
+/* Grouping the catalog by category only works if every item has one, so that
+   save is allowed to fail with the list of offenders and we render it inline.
+
+   Order rules live in two cards on purpose: «Изменение заказов» is about what
+   a customer may do to their own order, «Ограничение по времени» about the
+   daily deadline. Either works without the other. */
 
 let settings = {
   catalog: { group_by_category: false, show_images: false },
   notifications: { notify_owner: true },
   orders: {
-    cutoff_enabled: false, cutoff_time: '22:00',
-    after_cutoff: 'next_day', resume_time: '08:00', allow_delete_new: false
+    allow_edit_confirmed: false, allow_delete_new: false,
+    cutoff_enabled: false, cutoff_time: '22:00', lock_after_cutoff: true,
+    after_cutoff: 'next_day', resume_time: '08:00'
   }
 };
 let orphans = [];
@@ -62,8 +66,10 @@ function draw() {
   const images = !!settings.catalog?.show_images;
   const o = settings.orders || {};
   const cutoffOn = !!o.cutoff_enabled;
+  const lockAfter = o.lock_after_cutoff !== false;
   const blocking = o.after_cutoff === 'block';
   const allowDelete = !!o.allow_delete_new;
+  const editConfirmed = !!o.allow_edit_confirmed;
 
   body.innerHTML = '';
   const card = frag(`
@@ -111,38 +117,15 @@ function draw() {
       <div class="card__head"><div class="card__title">Изменение заказов</div></div>
       <div class="card__body">
         <div class="field">
-          <span class="field__label">Время закрытия</span>
-          <div class="seg" id="seg-cutoff">
-            <button data-v="off" aria-pressed="${!cutoffOn}">Без ограничения</button>
-            <button data-v="on"  aria-pressed="${cutoffOn}">До времени</button>
+          <span class="field__label">Изменение подтверждённых заказов</span>
+          <div class="seg" id="seg-edit-confirmed">
+            <button data-v="off" aria-pressed="${!editConfirmed}">Запрещено</button>
+            <button data-v="on"  aria-pressed="${editConfirmed}">Разрешено</button>
           </div>
-          <p class="hint">Пока заказ не подтверждён, заказчик меняет его свободно.
-             С ограничением — только до указанного времени: после него заказы
-             уходят в работу.</p>
+          <p class="hint">Неподтверждённый заказ заказчик меняет всегда.
+             «Разрешено» — он может править состав и после того, как заказ
+             приняли${cutoffOn && lockAfter ? ', но не позже времени закрытия' : ''}.</p>
         </div>
-
-        ${cutoffOn ? `
-        <div class="field">
-          <label class="field__label" for="cutoff-time">Заказы закрываются в</label>
-          <input id="cutoff-time" type="time" value="${esc(o.cutoff_time || '22:00')}">
-        </div>
-
-        <div class="field">
-          <span class="field__label">Заказы после этого времени</span>
-          <div class="seg" id="seg-after">
-            <button data-v="next_day" aria-pressed="${!blocking}">Принимать на следующий день</button>
-            <button data-v="block"    aria-pressed="${blocking}">Не принимать</button>
-          </div>
-          <p class="hint">«На следующий день» — заказ проходит, но считается за
-             завтра и меняется до завтрашнего закрытия.</p>
-        </div>
-
-        ${blocking ? `
-        <div class="field">
-          <label class="field__label" for="resume-time">Приём открывается снова в</label>
-          <input id="resume-time" type="time" value="${esc(o.resume_time || '08:00')}">
-          <p class="hint">Утром следующего дня.</p>
-        </div>` : ''}` : ''}
 
         <div class="field" style="margin-bottom:0">
           <span class="field__label">Отмена неподтверждённых заказов</span>
@@ -154,17 +137,75 @@ function draw() {
              подтвердили.</p>
         </div>
       </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card__head"><div class="card__title">Ограничение по времени</div></div>
+      <div class="card__body">
+        <div class="field" ${cutoffOn ? '' : 'style="margin-bottom:0"'}>
+          <span class="field__label">Ограничение</span>
+          <div class="seg" id="seg-cutoff">
+            <button data-v="off" aria-pressed="${!cutoffOn}">Выключено</button>
+            <button data-v="on"  aria-pressed="${cutoffOn}">Включено</button>
+          </div>
+          <p class="hint">Одно время в сутки, после которого день считается
+             закрытым. Пока ограничение выключено, время работы приёма ничем
+             не ограничено.</p>
+        </div>
+
+        ${cutoffOn ? `
+        <div class="field">
+          <label class="field__label" for="cutoff-time">Время закрытия</label>
+          <input id="cutoff-time" type="time" value="${esc(o.cutoff_time || '22:00')}">
+          <p class="hint">Местное время, по которому проходит граница дня.</p>
+        </div>
+
+        <div class="field">
+          <span class="field__label">Изменение заказов после этого времени</span>
+          <div class="seg" id="seg-lock">
+            <button data-v="off" aria-pressed="${!lockAfter}">Оставить доступным</button>
+            <button data-v="on"  aria-pressed="${lockAfter}">Запретить полностью</button>
+          </div>
+          <p class="hint">«Запретить полностью» — после времени закрытия заказы
+             дня уходят в работу: ни изменить, ни отменить их уже нельзя,
+             независимо от настроек выше.</p>
+        </div>
+
+        <div class="field" ${blocking ? '' : 'style="margin-bottom:0"'}>
+          <label class="field__label" for="sel-after">Новые заказы после этого времени</label>
+          <select class="select" id="sel-after">
+            <option value="next_day" ${!blocking ? 'selected' : ''}>Оформлять на следующий день</option>
+            <option value="block"    ${blocking ? 'selected' : ''}>Не принимать до следующего дня</option>
+          </select>
+          <p class="hint">${blocking
+            ? 'Приём закрыт до указанного ниже времени — заказчик увидит, когда откроется снова.'
+            : 'Заказ проходит как обычно, но автоматически попадает в список на завтра.'}</p>
+        </div>
+
+        ${blocking ? `
+        <div class="field" style="margin-bottom:0">
+          <label class="field__label" for="resume-time">Приём открывается снова в</label>
+          <input id="resume-time" type="time" value="${esc(o.resume_time || '08:00')}">
+          <p class="hint">Утром следующего дня.</p>
+        </div>` : ''}` : ''}
+      </div>
     </div>`);
 
   card.querySelectorAll('#seg-cutoff button').forEach((b) => {
     b.onclick = () => saveOrders({ cutoff_enabled: b.dataset.v === 'on' });
   });
-  card.querySelectorAll('#seg-after button').forEach((b) => {
-    b.onclick = () => saveOrders({ after_cutoff: b.dataset.v });
+  card.querySelectorAll('#seg-lock button').forEach((b) => {
+    b.onclick = () => saveOrders({ lock_after_cutoff: b.dataset.v === 'on' });
   });
   card.querySelectorAll('#seg-delete button').forEach((b) => {
     b.onclick = () => saveOrders({ allow_delete_new: b.dataset.v === 'on' });
   });
+  card.querySelectorAll('#seg-edit-confirmed button').forEach((b) => {
+    b.onclick = () => saveOrders({ allow_edit_confirmed: b.dataset.v === 'on' });
+  });
+
+  const after = card.querySelector('#sel-after');
+  if (after) after.onchange = () => saveOrders({ after_cutoff: after.value });
 
   // one save per finished edit, not per keystroke
   const cutoff = card.querySelector('#cutoff-time');
