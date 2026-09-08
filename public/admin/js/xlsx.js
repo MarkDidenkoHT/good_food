@@ -151,26 +151,141 @@ const isNumber = (v) =>
   typeof v === 'number' ? Number.isFinite(v)
     : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v));
 
-function cellXml(value, ref, style) {
-  const s = style ? ` s="${style}"` : '';
+/* ── styles ─────────────────────────────────────────────────────────────
+   A cell is either a bare value or { v, s } where s describes how it looks:
+
+     { b, i }            bold / italic
+     { color: 'FF0000' } font colour, RRGGBB
+     { size, font }      point size and typeface
+     { align, valign }   'left' | 'center' | 'right', 'top' | 'center' | 'bottom'
+     { wrap }            wrap text in the cell
+     { fmt }             number format, e.g. '0.00'
+     { box }             thin border on all four sides
+     { under }           thin border along the bottom only
+
+   Styles are deduplicated: the workbook ends up with one cellXfs entry per
+   distinct look, however many cells wear it. */
+
+function styles() {
+  const fonts = ['<font><sz val="11"/><name val="Calibri"/></font>'];
+  const borders = ['<border><left/><right/><top/><bottom/><diagonal/></border>'];
+  const fmts = [];                       // custom number formats, ids from 164
+  const xfs = ['<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'];
+  const seen = new Map([['', 0]]);
+
+  const push = (list, xml) => {
+    const at = list.indexOf(xml);
+    if (at >= 0) return at;
+    list.push(xml);
+    return list.length - 1;
+  };
+
+  return {
+    /* Returns the cellXfs index for a style descriptor. */
+    id(s) {
+      if (!s) return 0;
+      const key = JSON.stringify(s, Object.keys(s).sort());
+      if (seen.has(key)) return seen.get(key);
+
+      const fontId = push(fonts, '<font>' +
+        (s.b ? '<b/>' : '') + (s.i ? '<i/>' : '') +
+        `<sz val="${s.size || 11}"/>` +
+        (s.color ? `<color rgb="FF${s.color}"/>` : '') +
+        `<name val="${s.font || 'Calibri'}"/>` +
+        '</font>');
+
+      const edge = (name, on) =>
+        (on ? `<${name} style="thin"><color rgb="FF000000"/></${name}>` : `<${name}/>`);
+      const borderId = push(borders,
+        '<border>' +
+        edge('left', s.box) + edge('right', s.box) + edge('top', s.box) +
+        edge('bottom', s.box || s.under) + '<diagonal/></border>');
+
+      let numFmtId = 0;
+      if (s.fmt) {
+        const at = push(fmts, s.fmt);
+        numFmtId = 164 + at;
+      }
+
+      const align = (s.align || s.valign || s.wrap)
+        ? `<alignment${s.align ? ` horizontal="${s.align}"` : ''}` +
+          `${s.valign ? ` vertical="${s.valign}"` : ''}` +
+          `${s.wrap ? ' wrapText="1"' : ''}/>`
+        : '';
+
+      xfs.push(`<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="0" ` +
+        `borderId="${borderId}" xfId="0" applyFont="1" applyBorder="1"` +
+        `${numFmtId ? ' applyNumberFormat="1"' : ''}` +
+        `${align ? ' applyAlignment="1"' : ''}>${align}</xf>`);
+
+      const at = xfs.length - 1;
+      seen.set(key, at);
+      return at;
+    },
+
+    /* Child order inside styleSheet is fixed by the schema; Excel rejects the
+       file outright if numFmts/fonts/fills/borders/xfs come out of sequence. */
+    xml() {
+      return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+${fmts.length ? `<numFmts count="${fmts.length}">${fmts.map((f, i) =>
+  `<numFmt numFmtId="${164 + i}" formatCode="${xmlEsc(f)}"/>`).join('')}</numFmts>` : ''}
+<fonts count="${fonts.length}">${fonts.join('')}</fonts>
+<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+<borders count="${borders.length}">${borders.join('')}</borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="${xfs.length}">${xfs.join('')}</cellXfs>
+</styleSheet>`;
+    }
+  };
+}
+
+/* ── sheets ─────────────────────────────────────────────────────────────── */
+
+function cellXml(cell, ref, reg, fallback) {
+  const wrapped = cell !== null && typeof cell === 'object' && !Array.isArray(cell);
+  const value = wrapped ? cell.v : cell;
+  const id = wrapped && cell.s ? reg.id(cell.s) : fallback;
+  const s = id ? ` s="${id}"` : '';
+
   if (value === null || value === undefined || value === '') return `<c r="${ref}"${s}/>`;
   if (isNumber(value)) return `<c r="${ref}"${s}><v>${Number(value)}</v></c>`;
   return `<c r="${ref}"${s} t="inlineStr"><is><t xml:space="preserve">${xmlEsc(value)}</t></is></c>`;
 }
 
-function sheetXml(rows) {
+/* `header` bolds and freezes the first row — right for an export, wrong for a
+   document like a накладная, which sets its own look cell by cell. */
+function sheetXml(sheet, reg) {
+  const { rows = [], cols, merges, header = true } = sheet;
+  const headerId = header ? reg.id({ b: true }) : 0;
+
   const body = rows.map((row, r) => {
     const cells = (row || [])
-      .map((v, c) => cellXml(v, `${colName(c)}${r + 1}`, r === 0 ? 1 : 0))
+      .map((v, c) => cellXml(v, `${colName(c)}${r + 1}`, reg, r === 0 ? headerId : 0))
       .join('');
     return `<row r="${r + 1}">${cells}</row>`;
   }).join('');
 
+  const colsXml = cols?.length
+    ? `<cols>${cols.map((w, i) =>
+        `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('')}</cols>`
+    : '<cols><col min="1" max="40" width="18" customWidth="1"/></cols>';
+
+  const views = header
+    ? '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>'
+    : '<sheetViews><sheetView workbookViewId="0"/></sheetViews>';
+
+  // mergeCells belongs after sheetData, or Excel refuses the sheet
+  const mergeXml = merges?.length
+    ? `<mergeCells count="${merges.length}">${merges.map((m) =>
+        `<mergeCell ref="${m}"/>`).join('')}</mergeCells>`
+    : '';
+
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
-<cols><col min="1" max="40" width="18" customWidth="1"/></cols>
-<sheetData>${body}</sheetData></worksheet>`;
+${views}
+${colsXml}
+<sheetData>${body}</sheetData>${mergeXml}</worksheet>`;
 }
 
 /* Excel refuses these characters in a tab name, and anything past 31 chars. */
@@ -179,6 +294,13 @@ const sheetName = (name, i) =>
 
 function book(sheets) {
   const names = sheets.map((s, i) => sheetName(s.name, i));
+
+  // sheets first: writing them is what registers the styles the sheet uses
+  const reg = styles();
+  const sheetParts = sheets.map((s, i) => ({
+    name: `xl/worksheets/sheet${i + 1}.xml`,
+    text: sheetXml(s, reg)
+  }));
 
   return [
     { name: '[Content_Types].xml',
@@ -210,30 +332,25 @@ ${names.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openx
 <Relationship Id="rId${names.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>` },
 
-    // two cell formats: plain (0) and the bold header (1)
-    { name: 'xl/styles.xml',
-      text: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>
-<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
-<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
-<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>
-</styleSheet>` },
+    { name: 'xl/styles.xml', text: reg.xml() },
 
-    ...sheets.map((s, i) => ({
-      name: `xl/worksheets/sheet${i + 1}.xml`,
-      text: sheetXml(s.rows || [])
-    }))
+    ...sheetParts
   ];
 }
 
 /* ── public ─────────────────────────────────────────────────────────────── */
 
-/* `sheets` is either a rows array (one sheet) or [{ name, rows }]. */
-export function downloadXlsx(fileName, sheets, sheetLabel = 'Лист1') {
+/* `sheets` is either a rows array (one sheet) or [{ name, rows, cols, merges,
+   header }]. Options:
+
+     sheetName  tab name when `sheets` is a bare rows array
+     stamp      append the date to the file name (default true) — an export is
+                a snapshot and wants it; a document named «Расходная накладная
+                №4» already identifies itself and does not. */
+export function downloadXlsx(fileName, sheets, opts = {}) {
+  const { sheetName: label = 'Лист1', stamp = true } = opts;
   const list = Array.isArray(sheets) && Array.isArray(sheets[0])
-    ? [{ name: sheetLabel, rows: sheets }]
+    ? [{ name: label, rows: sheets }]
     : sheets;
 
   const blob = new Blob([zip(book(list))], {
@@ -242,7 +359,9 @@ export function downloadXlsx(fileName, sheets, sheetLabel = 'Лист1') {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${fileName}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  a.download = stamp
+    ? `${fileName}_${new Date().toISOString().slice(0, 10)}.xlsx`
+    : `${fileName}.xlsx`;
   a.click();
   URL.revokeObjectURL(url);
 }

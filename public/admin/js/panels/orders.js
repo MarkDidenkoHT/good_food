@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { h, esc, toast, confirmDialog, fmtDate } from '../ui.js';
 import { paintIcons } from '../icons.js';
 import { downloadXlsx } from '../xlsx.js';
+import { downloadInvoice } from '../invoice.js';
 
 /* Only the date range costs a request. Status, type and company narrow the
    rows already in memory, so those dropdowns react instantly. */
@@ -224,7 +225,7 @@ function rowHTML(o) {
         ${o.status === 'new' ? `
           <button class="btn btn--sm btn--primary" data-decide="${o.id}" data-status="confirmed">Принять</button>
           <button class="btn btn--sm" data-decide="${o.id}" data-status="rejected">Отклонить</button>` : ''}
-        <button class="btn btn--ghost btn--icon btn--sm" data-invoice="${o.id}" title="Печать накладной"><span data-icon="print"></span></button>
+        <button class="btn btn--ghost btn--icon btn--sm" data-invoice="${o.id}" title="Скачать накладную"><span data-icon="print"></span></button>
       </div></td>
     </tr>`;
 }
@@ -286,7 +287,7 @@ function exportOrders(kind) {
     }
   }
   downloadXlsx(kind === 'return' ? 'vozvraty' : 'zakazy', out,
-               kind === 'return' ? 'Возвраты' : 'Заказы');
+               { sheetName: kind === 'return' ? 'Возвраты' : 'Заказы' });
   toast(`Выгружено: ${list.length}`);
 }
 
@@ -337,6 +338,9 @@ function sendToKitchen() {
 }
 
 function printInvoice(id) {
-  // The real накладная waits on the blank the client will supply.
-  toast(`Накладная для заказа #${id} — шаблон ещё не готов`);
+  const order = rows.find((o) => String(o.id) === String(id));
+  if (!order) return toast('Заказ не найден', 'err');
+
+  const { name } = downloadInvoice(order);
+  toast(`${name} №${order.id} скачана`);
 }
