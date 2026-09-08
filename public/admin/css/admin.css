@@ -263,6 +263,22 @@ body.nav-compact .nav__list { padding: 10px 8px; }
 .picker__row > input[type="checkbox"] { flex: 0 0 auto; cursor: pointer; }
 .picker__cost { color: var(--ink-3); font-size: 12px; white-space: nowrap; }
 
+/* Broadcast audience picker: the whole row is the label, so the name takes
+   the slack and the count stays pinned right. */
+label.picker__row { cursor: pointer; }
+.picker__label { flex: 1 1 auto; font-weight: 600; }
+.picker__note { color: var(--ink-3); font-size: 12px; white-space: nowrap; }
+
+/* A button that reads as a link — "выбрать все" and friends, which belong in
+   a hint line rather than on a button of their own. */
+.linkbtn {
+  border: 0; background: none; padding: 0; cursor: pointer;
+  color: var(--brand); font-weight: 700; text-decoration: underline;
+}
+.linkbtn:hover { opacity: .8; }
+
+textarea.input { resize: vertical; min-height: 96px; line-height: 1.45; }
+
 /* ── inline alert ───────────────────────────────────────────── */
 .alert {
   border: 1px solid var(--line); border-left: 3px solid var(--ink-3);

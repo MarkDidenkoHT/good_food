@@ -7,12 +7,6 @@ const stub = (id, label, icon, subtitle, text) => ({
   render(container) { container.append(placeholder(label, text)); }
 });
 
-export const messagesPanel = stub(
-  'messages', 'Сообщения', 'messages',
-  'Рассылки пользователям',
-  'Отправка сообщений и уведомлений пользователям через Telegram-бот.'
-);
-
 export const cronPanel = stub(
   'cron', 'Cron', 'cron',
   'Регулярные задачи',

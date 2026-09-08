@@ -2,9 +2,11 @@ import { Router } from 'express';
 import { supabase, dbError } from '../lib/supabase.js';
 import { requireAdmin } from '../lib/auth.js';
 import { refreshUserNotice, announceOrderDecision } from '../lib/notices.js';
-import { sendMessage, kitchenGroupId, esc as tgEsc } from '../lib/telegram.js';
+import { sendMessage, kitchenGroupId, botConfigured, esc as tgEsc } from '../lib/telegram.js';
 import { uploadImage, removeImage, signedUrl, MAX_BYTES, extFor } from '../lib/storage.js';
 import { ORDER_DEFAULTS, parseTime } from '../lib/orders.js';
+import { resolveAudience, normaliseAudience, deliver, recall, MAX_TEXT }
+  from '../lib/broadcasts.js';
 import express from 'express';
 
 export const adminRouter = Router();
@@ -436,7 +438,8 @@ adminRouter.post('/images',
     if (!extFor(contentType)) {
       return res.status(415).json({ error: 'Поддерживаются JPEG, PNG, WebP и GIF' });
     }
-    const folder = req.query.folder === 'categories' ? 'categories' : 'items';
+    const FOLDERS = ['items', 'categories', 'broadcasts'];
+    const folder = FOLDERS.includes(req.query.folder) ? req.query.folder : 'items';
     try {
       const path = await uploadImage(req.body, contentType, folder);
       res.status(201).json({ path });
@@ -455,6 +458,141 @@ adminRouter.get('/images/view', async (req, res) => {
 
 adminRouter.delete('/images', async (req, res) => {
   await removeImage(String(req.query.path || ''));
+  res.json({ ok: true });
+});
+
+/* ---------- broadcasts ---------- */
+
+/* History, newest first. The per-recipient rows are the interesting part but
+   also the bulk of the data, so the list carries only the counters and the
+   detail endpoint fetches the rest. */
+adminRouter.get('/broadcasts', async (req, res) => {
+  const { data, error } = await supabase
+    .from('broadcasts')
+    .select('id, created_at, sent_by_name, text, image_path, audience, status, ' +
+            'recipients, delivered, failed, finished_at, deleted_at')
+    .order('created_at', { ascending: false })
+    .limit(100);
+  if (error) return dbError(res, error, 500);
+  res.json(data || []);
+});
+
+adminRouter.get('/broadcasts/:id', async (req, res) => {
+  const [{ data: broadcast, error: bErr }, { data: targets, error: tErr }] = await Promise.all([
+    supabase.from('broadcasts').select('*').eq('id', req.params.id).maybeSingle(),
+    supabase.from('broadcast_targets')
+      .select('id, user_id, user_name, company_id, chat_id, message_id, status, error, deleted_at')
+      .eq('broadcast_id', req.params.id)
+      .order('id')
+  ]);
+  if (bErr) return dbError(res, bErr, 500);
+  if (tErr) return dbError(res, tErr, 500);
+  if (!broadcast) return res.status(404).json({ error: 'Рассылка не найдена' });
+  res.json({ ...broadcast, targets: targets || [] });
+});
+
+/* Who a broadcast would reach, so the panel can say "17 получателей" before
+   anything is sent. Same resolver the send uses, so the count cannot drift
+   from the reality. */
+adminRouter.post('/broadcasts/preview', async (req, res) => {
+  try {
+    const list = await resolveAudience(normaliseAudience(req.body));
+    res.json({ count: list.length, users: list.map((u) => ({ id: u.id, user_name: u.user_name })) });
+  } catch (e) {
+    dbError(res, e, 500);
+  }
+});
+
+/* Compose and send. The recipient list is fixed and written down inside the
+   request — so the history is truthful the moment it appears — but the
+   sending itself is detached: at Telegram's pace a large broadcast takes far
+   longer than a request should, and the panel polls the counters instead. */
+adminRouter.post('/broadcasts', async (req, res) => {
+  if (!botConfigured()) {
+    return res.status(503).json({ error: 'Бот не настроен — TELEGRAM_BOT_TOKEN не задан' });
+  }
+
+  const text = String(req.body?.text || '').trim();
+  const imagePath = String(req.body?.image_path || '').trim() || null;
+
+  if (!text && !imagePath) return res.status(400).json({ error: 'Введите текст или добавьте фото' });
+  if (text.length > MAX_TEXT) {
+    return res.status(400).json({ error: `Не больше ${MAX_TEXT} символов` });
+  }
+
+  const audience = normaliseAudience(req.body);
+
+  let recipients;
+  try {
+    recipients = await resolveAudience(audience);
+  } catch (e) {
+    return dbError(res, e, 500);
+  }
+  if (!recipients.length) {
+    return res.status(400).json({ error: 'В выборке нет пользователей с Telegram' });
+  }
+
+  const { data: broadcast, error } = await supabase.from('broadcasts').insert({
+    sent_by: req.admin.id,
+    sent_by_name: req.admin.name || null,
+    text: text || null,
+    image_path: imagePath,
+    audience,
+    status: 'sending',
+    recipients: recipients.length
+  }).select().single();
+  if (error) return dbError(res, error);
+
+  // The name and company are copied onto the target row: history has to keep
+  // reading correctly after a user is renamed, moved, or deleted.
+  const { error: tErr } = await supabase.from('broadcast_targets').insert(
+    recipients.map((u) => ({
+      broadcast_id: broadcast.id,
+      user_id: u.id,
+      user_name: u.user_name,
+      company_id: u.company_id,
+      chat_id: u.chat_id
+    })));
+  if (tErr) return dbError(res, tErr);
+
+  deliver(broadcast.id, text, imagePath)
+    .catch((e) => console.error('[broadcast] delivery failed:', e));
+
+  res.status(201).json(broadcast);
+});
+
+/* Recall: delete every delivered copy from the users' chats. The history row
+   stays — what was sent, and to whom, is a record. */
+adminRouter.post('/broadcasts/:id/recall', async (req, res) => {
+  const { data: broadcast } = await supabase
+    .from('broadcasts').select('id, status').eq('id', req.params.id).maybeSingle();
+  if (!broadcast) return res.status(404).json({ error: 'Рассылка не найдена' });
+  if (broadcast.status === 'sending') {
+    return res.status(409).json({ error: 'Рассылка ещё отправляется' });
+  }
+
+  try {
+    const { removed, kept } = await recall(broadcast.id);
+    res.json({ ok: true, removed, kept });
+  } catch (e) {
+    dbError(res, e, 500);
+  }
+});
+
+/* Drops the record itself, once the messages are out of the chats. The
+   picture goes with it — nothing else points at it. */
+adminRouter.delete('/broadcasts/:id', async (req, res) => {
+  const { data: broadcast } = await supabase
+    .from('broadcasts').select('id, status, image_path').eq('id', req.params.id).maybeSingle();
+  if (!broadcast) return res.status(404).json({ error: 'Рассылка не найдена' });
+  if (broadcast.status === 'sending') {
+    return res.status(409).json({ error: 'Рассылка ещё отправляется' });
+  }
+
+  // targets go with it through the cascade
+  const { error } = await supabase.from('broadcasts').delete().eq('id', broadcast.id);
+  if (error) return dbError(res, error);
+  if (broadcast.image_path) await removeImage(broadcast.image_path);
   res.json({ ok: true });
 });
 

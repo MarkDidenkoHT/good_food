@@ -63,6 +63,27 @@ export function editMessageText(chatId, messageId, text, extra = {}) {
   });
 }
 
+/* `photo` is a URL Telegram fetches itself — the bucket is private, so what
+   goes in is a short-lived signed link. The caption limit is 1024 characters,
+   which is why a broadcast's text is capped below it. */
+export function sendPhoto(chatId, photo, caption = '', extra = {}) {
+  if (!chatId || !photo) return Promise.resolve(null);
+  return call('sendPhoto', {
+    chat_id: chatId,
+    photo,
+    ...(caption ? { caption, parse_mode: 'HTML' } : {}),
+    ...extra
+  });
+}
+
+/* Recalls a message from a chat. Telegram refuses for reasons the caller can
+   do nothing about — the user blocked the bot, cleared the chat, or the
+   message is too old — so the result is reported, never thrown. */
+export function deleteMessage(chatId, messageId) {
+  if (!chatId || !messageId) return Promise.resolve(null);
+  return call('deleteMessage', { chat_id: chatId, message_id: messageId });
+}
+
 /* Notify the operators' group. Silently does nothing when the group is not
    configured, so a half-configured deploy still serves users. */
 export function notifyAdmins(text) {

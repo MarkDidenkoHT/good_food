@@ -7,7 +7,8 @@ import { usersPanel } from './panels/users.js';
 import { itemsPanel } from './panels/items.js';
 import { settingsPanel } from './panels/settings.js';
 import { ordersPanel } from './panels/orders.js';
-import { messagesPanel, cronPanel } from './panels/placeholders.js';
+import { messagesPanel } from './panels/messages.js';
+import { cronPanel } from './panels/placeholders.js';
 
 /* Nav order. Users sits first while it is the only working panel; the final
    order is orders → items → users → settings → messages → cron. */
@@ -114,6 +115,9 @@ function parseHash() {
 }
 
 async function navigate(panel, params = {}) {
+  // a panel that started something in the background (a poll, a timer) gets
+  // told it is leaving, before its markup is thrown away
+  if (current && current !== panel) current.destroy?.();
   current = panel;
 
   const qs = new URLSearchParams(params).toString();

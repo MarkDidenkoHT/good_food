@@ -22,8 +22,8 @@ Three blocks: left nav (300px) · main content · right accessibility panel (300
 - Theme (light/dark) and the compact toggle sit at the bottom of the nav.
 - Preferences persist in `localStorage` and sync to `public.admin_prefs`.
 - Working today: **Заказы** (confirm/reject), **Позиции** (items, categories,
-  materials), **Пользователи** (users + companies), **Настройки**.
-  Сообщения and Cron are still placeholders.
+  materials), **Пользователи** (users + companies), **Настройки**,
+  **Сообщения** (broadcasts). Cron is still a placeholder.
 
 Login: **chat_id + access code** of a `public.users` row with `role = 'admin'`
 → signed httpOnly cookie (12h). Both must match the same row. Owner codes are
@@ -98,6 +98,33 @@ the old post is blanked to a pointer, since somebody may already have started
 on those numbers. A cancellation marks the old post instead of removing it.
 
 Apply `db/migrations/order_edit_cutoff.sql` before deploying this.
+
+## Broadcasts (Сообщения)
+
+An admin composes one message — up to **1000 characters**, optionally with a
+single photo — and picks who gets it: everyone, whole companies, or named
+people. Only users with an open access flag who have started the bot are
+recipients; the panel shows the count before anything is sent.
+
+Two tables back it. `broadcasts` holds what was composed and the counters;
+`broadcast_targets` holds one row per recipient carrying **that user's own
+Telegram `message_id`**. That id is the only handle Telegram gives for taking
+a message back out of a chat, so it has to be stored per user — which is what
+makes **«Удалить сообщение из чатов»** possible after the fact.
+
+Delivery is detached from the request: the recipient list is fixed and written
+down before the route answers, then `src/lib/broadcasts.js` sends at ~25/s and
+updates the counters as it goes; the panel polls while anything is in flight.
+One blocked chat is recorded against that recipient and the run continues.
+Recall behaves the same way — Telegram refusing to delete one copy (chat
+cleared, bot blocked, message too old) leaves that row marked and moves on.
+
+The photo lives in the `item_images` bucket under `broadcasts/`; the bucket is
+private, so the send hands Telegram a short-lived signed URL to fetch. The
+1000-character cap sits under Telegram's 1024-character caption limit, so the
+same text works with and without a picture.
+
+Apply `db/migrations/008_broadcasts.sql` before deploying this.
 
 ## Telegram bot
 
