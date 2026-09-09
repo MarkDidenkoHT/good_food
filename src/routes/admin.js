@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { supabase, dbError } from '../lib/supabase.js';
 import { requireAdmin } from '../lib/auth.js';
 import { refreshUserNotice, announceOrderDecision } from '../lib/notices.js';
-import { sendMessage, kitchenGroupId, botConfigured, esc as tgEsc } from '../lib/telegram.js';
+import { sendMessage, notifyAdmins, kitchenGroupId, botConfigured, esc as tgEsc } from '../lib/telegram.js';
 import { uploadImage, removeImage, signedUrl, MAX_BYTES, extFor } from '../lib/storage.js';
 import { ORDER_DEFAULTS, parseTime } from '../lib/orders.js';
 import { resolveAudience, normaliseAudience, deliver, recall, MAX_TEXT }
@@ -29,6 +29,9 @@ adminRouter.get('/users', async (req, res) => {
 adminRouter.post('/users', async (req, res) => {
   const body = pickUser(req.body);
   if (!body.user_name) return res.status(400).json({ error: 'Name required' });
+  if (body.chat_id === BAD_CHAT_ID) {
+    return res.status(400).json({ error: 'Chat ID — только цифры, без пробелов и знаков' });
+  }
   // an admin logs in with chat_id + their company's code, so both are required
   if (body.role === 'admin' && !body.chat_id) {
     return res.status(400).json({ error: 'Администратору нужен chat_id для входа' });
@@ -37,12 +40,45 @@ adminRouter.post('/users', async (req, res) => {
     return res.status(400).json({ error: 'Администратору нужна компания — её код он вводит при входе' });
   }
   const { data, error } = await supabase.from('users').insert(body).select().single();
-  if (error) return dbError(res, error);
+  if (error) return userError(res, error);
   res.status(201).json(data);
 });
 
 adminRouter.patch('/users/:id', async (req, res) => {
   const patch = pickUser(req.body);
+  if (patch.chat_id === BAD_CHAT_ID) {
+    return res.status(400).json({ error: 'Chat ID — только цифры, без пробелов и знаков' });
+  }
+
+  /* chat_id is the identity half of the login: /api/auth resolves WHO you are
+     by chat_id alone, and the company code only proves which company. Pointing
+     an established row at another Telegram account therefore hands that account
+     over, admin rows included.
+
+     A panel-side lock is not a boundary — an admin can call this API directly —
+     so the aim is that a rebind cannot happen by accident or quietly. It needs
+     an explicit flag the form only sends after a typed confirmation, and every
+     one of them is announced in the operators' group. `last_login` is the test
+     for "established": it means someone actually signed in with this id, which
+     a hand-typed one may never have done. */
+  let rebind = null;
+  if ('chat_id' in patch) {
+    const { data: before } = await supabase
+      .from('users').select('user_name, chat_id, last_login').eq('id', req.params.id).maybeSingle();
+
+    const established = before?.chat_id != null && before?.last_login != null;
+    if (established && patch.chat_id !== before.chat_id) {
+      if (req.body?.chat_id_rebind !== true) {
+        return res.status(409).json({
+          error: 'chat_id_locked',
+          message: 'Этот Chat ID уже использовался для входа. Смена доступа требует подтверждения.',
+          chat_id: String(before.chat_id)
+        });
+      }
+      rebind = { name: before.user_name, from: before.chat_id, to: patch.chat_id };
+    }
+  }
+
   if (patch.role === 'admin' && 'chat_id' in patch && patch.chat_id === null) {
     return res.status(400).json({ error: 'Администратору нужен chat_id для входа' });
   }
@@ -55,7 +91,22 @@ adminRouter.patch('/users/:id', async (req, res) => {
   }
   const { data, error } = await supabase
     .from('users').update(patch).eq('id', req.params.id).select().single();
-  if (error) return dbError(res, error);
+  if (error) return userError(res, error);
+
+  // a rebind is the one edit here that changes who can sign in as this user,
+  // so it goes on the record even when it was entirely legitimate
+  if (rebind) {
+    const to = rebind.to === null ? 'не задан' : String(rebind.to);
+    notifyAdmins(
+      `<b>Сменён Chat ID</b>
+${tgEsc(rebind.name || `#${req.params.id}`)}
+` +
+      `было: <code>${rebind.from}</code>
+стало: <code>${tgEsc(to)}</code>
+` +
+      `кто: ${tgEsc(req.admin?.name || 'админ')}`
+    ).catch((e) => console.error('[notices]', e));
+  }
 
   // the group post is the operators' worklist — keep it current
   refreshUserNotice(data).catch((e) => console.error('[notices]', e));
@@ -871,7 +922,24 @@ function pickItem(b = {}) {
 function toChatId(v) {
   const str = String(v ?? '').trim();
   if (!str) return null;
-  return /^-?\d{1,20}$/.test(str) ? Number(str) : null;
+  // Garbage used to fall through as null, which SILENTLY CLEARED the field and
+  // locked the user out with a success toast. A malformed id is an error now;
+  // only a genuinely empty value means "no chat id".
+  if (!/^-?\d{1,20}$/.test(str)) return BAD_CHAT_ID;
+  return Number(str);
+}
+
+// distinguishable from null, which is a legitimate "unset"
+const BAD_CHAT_ID = Symbol('bad chat id');
+
+// One Telegram account is one row, so a chat id already in use is the
+// collision an admin can actually cause here. Say so instead of leaking the
+// index name; anything else falls through to the generic handler.
+function userError(res, error) {
+  if (error?.code === '23505' && String(error.message).includes('users_chat_id_key')) {
+    return res.status(409).json({ error: 'Этот Chat ID уже привязан к другому пользователю' });
+  }
+  return dbError(res, error);
 }
 
 // how many of a material go into one item; rows written before quantities

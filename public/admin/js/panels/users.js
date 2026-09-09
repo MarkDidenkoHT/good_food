@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { h, esc, toast, modal, confirmDialog, fmtDate } from '../ui.js';
+import { h, esc, toast, modal, confirmDialog, onModalCancel, fmtDate } from '../ui.js';
 
 let rows = [];
 let query = '';
@@ -179,7 +179,12 @@ function openForm(user) {
         <input class="input input--code" id="f-chat" name="chat_id" inputmode="numeric"
                maxlength="20" placeholder="312756470" value="${esc(user?.chat_id ?? '')}">
         <p class="hint">Заполняется автоматически, когда пользователь нажимает /start в боте.
-           Вместе с паролем компании используется для входа.</p>
+           Вместе с паролем компании используется для входа.
+           ${user?.last_login
+             ? `<b>Этот ID уже использовался для входа.</b> Смена передаст доступ
+                к аккаунту другому Telegram — потребуется подтверждение, и об этом
+                будет сообщено в группу операторов.`
+             : ''}</p>
       </div>
       <div class="field">
         <label class="field__label" for="f-role">Роль</label>
@@ -219,7 +224,16 @@ function openForm(user) {
         await api.post('/api/admin/users', payload);
         toast('Пользователь создан');
       } else {
-        await api.patch(`/api/admin/users/${user.id}`, payload);
+        try {
+          await api.patch(`/api/admin/users/${user.id}`, payload);
+        } catch (err) {
+          // The server refuses a chat_id rebind on an account that has signed
+          // in unless it is confirmed. Ask here, then repeat the same save with
+          // the flag; anything else is a real error and belongs to the modal.
+          if (err.code !== 'chat_id_locked') throw err;
+          await confirmRebind(user, err.body?.chat_id, payload.chat_id);
+          await api.patch(`/api/admin/users/${user.id}`, { ...payload, chat_id_rebind: true });
+        }
         toast('Изменения сохранены');
       }
       await load();

@@ -13,7 +13,15 @@ async function request(method, url, body) {
 
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
-  if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    // Some refusals carry more than a message — a code the caller branches on,
+    // plus the context it needs to explain itself — so the body rides along.
+    const err = new Error(data?.message || data?.error || `HTTP ${res.status}`);
+    err.status = res.status;
+    err.code = data?.error;
+    err.body = data;
+    throw err;
+  }
   return data;
 }
 

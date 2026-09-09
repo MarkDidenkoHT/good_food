@@ -176,6 +176,39 @@ longer sold must still be selectable to send back.
 Toggle it from the row pill in **Позиции** (one click, no dialog — it is
 reversible) or from the item form. Apply `db/migrations/009_item_available.sql`.
 
+## Chat ID is a credential
+
+`chat_id` is not a contact detail — it is the identity half of the login.
+`POST /api/auth/*` resolves **who you are** from `chat_id` alone; the company
+code only proves **which company**. Pointing an established row at another
+Telegram account therefore hands that account over, `role: 'admin'` rows
+included.
+
+It cannot simply be made read-only: [admin.js](src/routes/admin.js) *requires*
+a `chat_id` when creating an admin, because admins are pre-created before they
+ever press `/start`. So the rule is about *re*-binding, not editing:
+
+- `last_login IS NOT NULL` is the test for "established" — it means someone
+  actually signed in with this id. A hand-typed id may never have been used;
+  `chat_id` being merely present proves nothing.
+- Changing or clearing such an id answers **409 `chat_id_locked`** unless the
+  request carries `chat_id_rebind: true`, which the panel sends only after the
+  admin types the user's name back.
+- Every rebind is posted to the operators' group with the old id, the new one,
+  and which admin did it.
+
+The notification is the part that matters. A panel-side lock is **not** a
+security boundary — an admin can call the API directly — so the goal is that a
+rebind cannot happen by accident or *quietly*. Admins remain trusted; this
+makes the one edit that transfers an account visible after the fact.
+
+Two smaller guards sit alongside it. `toChatId` used to return `null` for
+anything non-numeric, so a typo like `312 756 470` silently **cleared** the
+field and locked the user out under a success toast — malformed input is a
+400 now, and only a genuinely empty value means "no chat id". And the
+`users_chat_id_key` collision answers 409 with a readable message instead of
+raw Postgres text.
+
 ## FrontPad
 
 Groundwork only — nothing is sent to FrontPad yet. What is in place is the

@@ -50,6 +50,10 @@ export function modal({ title, bodyHTML, submitLabel = 'Сохранить', onS
 
   let cancelHook = null;
   cancelHooks.set(el, (fn) => { cancelHook = fn; });
+  // Modals can stack (a form that asks to confirm before it saves), so closing
+  // the top one has to hand the pointer back to the one underneath rather than
+  // clear it — otherwise the outer form's cancel hook is silently lost.
+  const parentModal = currentModal;
   currentModal = el;
 
   let submitted = false;
@@ -57,10 +61,12 @@ export function modal({ title, bodyHTML, submitLabel = 'Сохранить', onS
     el.remove();
     document.removeEventListener('keydown', onKey);
     cancelHooks.delete(el);
-    if (currentModal === el) currentModal = null;
+    if (currentModal === el) currentModal = parentModal;
     if (!submitted) cancelHook?.();
   };
-  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  // with a dialog stacked on top, Escape must dismiss only the topmost one —
+  // both listeners are live, so each checks whether it is the one on top
+  const onKey = (e) => { if (e.key === 'Escape' && currentModal === el) close(); };
 
   el.querySelector('[data-cancel]').onclick = close;
   el.querySelector('.modal__backdrop').onclick = close;
