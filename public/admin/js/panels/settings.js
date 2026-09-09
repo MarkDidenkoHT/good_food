@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { h, esc, toast } from '../ui.js';
+import { h, esc, toast, paintSegs } from '../ui.js';
 import { paintIcons } from '../icons.js';
 
 /* Grouping the catalog by category only works if every item has one, so that
@@ -21,6 +21,11 @@ let settings = {
 };
 let orphans = [];
 let root;
+
+/* What the last draw put on screen, so the next one can tell which fields are
+   genuinely new and animate only those. A redraw that changes nothing
+   structural must not make the whole panel move. */
+let shown = { cutoff: null, blocking: null };
 
 export const settingsPanel = {
   id: 'settings',
@@ -260,7 +265,18 @@ function draw() {
 
   body.append(card);
   if (orphans.length) body.querySelector('#settings-error').append(orphanBox());
+
+  // Only the fields that were not there a moment ago slide in.
+  if (cutoffOn && shown.cutoff === false) markEntering(body, '#cutoff-time, #seg-lock, #sel-after');
+  if (blocking && shown.blocking === false) markEntering(body, '#resume-time');
+  shown = { cutoff: cutoffOn, blocking };
+
   paintIcons(body);
+  paintSegs(body);
+}
+
+function markEntering(body, selector) {
+  body.querySelectorAll(selector).forEach((el) => el.closest('.field')?.classList.add('field--enter'));
 }
 
 function orphanBox() {
@@ -276,13 +292,17 @@ function orphanBox() {
 }
 
 async function save(grouped) {
+  const before = settings.catalog;
+  settings.catalog = { ...settings.catalog, group_by_category: grouped };
+  orphans = [];
+  draw();
   try {
     const res = await api.put('/api/admin/settings/catalog', { group_by_category: grouped });
-    settings.catalog = res.value;
-    orphans = [];
-    draw();
+    settle('catalog', res.value);
     toast('Настройка сохранена');
   } catch (e) {
+    settings.catalog = before;
+    draw();
     // the 409 carries the offending items — api.js only surfaces the message,
     // so re-fetch them for the inline list
     if (/категори/i.test(e.message)) {
@@ -299,36 +319,68 @@ async function save(grouped) {
 }
 
 async function saveNotify(notifyOwner) {
+  const before = settings.notifications;
+  settings.notifications = { ...settings.notifications, notify_owner: notifyOwner };
+  draw();
   try {
     const res = await api.put('/api/admin/settings/notifications', { notify_owner: notifyOwner });
-    settings.notifications = res.value;
-    draw();
+    settle('notifications', res.value);
     toast('Настройка сохранена');
   } catch (e) {
+    settings.notifications = before;
+    draw();
     toast(e.message, 'err');
   }
 }
 
 /* Both image controls write the same row, one key at a time. */
 async function saveCatalog(patch) {
+  const before = settings.catalog;
+  settings.catalog = { ...settings.catalog, ...patch };
+  draw();
   try {
     const res = await api.put('/api/admin/settings/catalog', patch);
-    settings.catalog = res.value;
-    draw();
+    settle('catalog', res.value);
     toast('Настройка сохранена');
   } catch (e) {
+    settings.catalog = before;
+    draw();
     toast(e.message, 'err');
   }
 }
 
 async function saveOrders(patch) {
+  const before = settings.orders;
+  settings.orders = { ...settings.orders, ...patch };
+  draw();
   try {
     const res = await api.put('/api/admin/settings/orders', patch);
-    settings.orders = res.value;
-    draw();
+    settle('orders', res.value);
     toast('Настройка сохранена');
   } catch (e) {
-    draw();                       // put the rejected value back to what is stored
+    settings.orders = before;     // put the rejected value back to what is stored
+    draw();
     toast(e.message, 'err');
   }
+}
+
+/* The server's answer is the authority, but it is almost always exactly what
+   was already drawn — so take the value and redraw only when it actually
+   differs. Redrawing regardless is what made saving a setting flash half a
+   second after the press.
+
+   Compared by key, not by JSON text: the server builds its answer by merging
+   defaults with the stored row, so the same settings can arrive with the keys
+   in a different order, and a plain stringify would call every save a change
+   and redraw every time — which is the flash this is here to prevent. */
+function settle(key, value) {
+  const changed = !sameShallow(settings[key], value);
+  settings[key] = value;
+  if (changed) draw();
+}
+
+function sameShallow(a = {}, b = {}) {
+  const keys = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
+  for (const k of keys) if (a?.[k] !== b?.[k]) return false;
+  return true;
 }

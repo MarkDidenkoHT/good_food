@@ -82,8 +82,95 @@ export function modal({ title, bodyHTML, submitLabel = 'Сохранить', onS
   });
 
   root.append(el);
+  paintSegs(el);
   el.querySelector('input, select, textarea')?.focus();
   return { close };
+}
+
+/* ── segmented controls ──────────────────────────────────────── */
+
+/* Gives every .seg a thumb that slides between the options instead of the
+   highlight simply appearing somewhere else.
+
+   Driven by a MutationObserver on aria-pressed rather than by a click
+   handler, so it is the state that moves the thumb, not the press. Anything
+   that already flips aria-pressed — a click, a redraw, a value arriving from
+   the server — animates for free, and nothing has to be rewired. */
+
+/* Where each control's thumb was when its markup was last thrown away, keyed
+   by the element's id. A panel that redraws itself builds a brand new .seg,
+   and without this the thumb would simply appear at the new option: the
+   redraw would eat the very animation it was meant to show. Starting the new
+   thumb at the old position and letting it travel makes the re-render
+   invisible, which is the point. */
+const segMemory = new Map();
+
+export function paintSegs(root = document) {
+  root.querySelectorAll?.('.seg').forEach(initSeg);
+}
+
+function initSeg(seg) {
+  if (seg.dataset.seg) return;
+  seg.dataset.seg = '1';
+
+  const thumb = document.createElement('span');
+  thumb.className = 'seg__thumb';
+  thumb.setAttribute('aria-hidden', 'true');
+  seg.prepend(thumb);
+
+  // A control with no id cannot be recognised across a redraw; it still
+  // animates in place, it just cannot inherit a position.
+  const id = seg.id || null;
+
+  /* null while the control is not laid out — inside a closed dialog, or in a
+     field that is hidden until some other setting is switched on. */
+  const geometry = () => {
+    const active = seg.querySelector('button[aria-pressed="true"]');
+    if (!active || !active.offsetWidth) return null;
+    return { left: active.offsetLeft, width: active.offsetWidth };
+  };
+
+  const place = (g, animate) => {
+    if (!animate) thumb.style.transition = 'none';
+    thumb.style.opacity = '1';
+    thumb.style.left = `${g.left}px`;
+    thumb.style.width = `${g.width}px`;
+    if (!animate) {
+      void thumb.offsetWidth;                 // commit before restoring
+      thumb.style.transition = '';
+    }
+  };
+
+  const move = (animate) => {
+    const g = geometry();
+    if (!g) { thumb.style.opacity = '0'; return; }
+    place(g, animate);
+    if (id) segMemory.set(id, g);
+  };
+
+  const now = geometry();
+  const previous = id ? segMemory.get(id) : null;
+  if (now && previous && (previous.left !== now.left || previous.width !== now.width)) {
+    place(previous, false);                   // start where the old markup left off
+
+    // A frame first, so the starting position is painted before the travel
+    // begins — but rAF never fires while the tab is in the background, and a
+    // thumb stranded under the wrong option is worse than one that arrives
+    // without ceremony. Whichever comes first wins.
+    let moved = false;
+    const go = () => { if (!moved) { moved = true; move(true); } };
+    requestAnimationFrame(go);
+    setTimeout(go, 60);
+  } else {
+    move(false);
+  }
+
+  new MutationObserver(() => move(true))
+    .observe(seg, { attributes: true, attributeFilter: ['aria-pressed'], subtree: true });
+
+  // Covers the control being laid out for the first time, and the window
+  // being resized under it.
+  new ResizeObserver(() => move(false)).observe(seg);
 }
 
 export function confirmDialog(title, text, onYes, submitLabel = 'Удалить') {

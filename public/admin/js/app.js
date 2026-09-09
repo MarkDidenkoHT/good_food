@@ -1,6 +1,6 @@
 import { api, Unauthorized } from './api.js';
 import { paintIcons, icon } from './icons.js';
-import { h, esc, toast } from './ui.js';
+import { h, esc, toast, paintSegs } from './ui.js';
 import * as prefsMod from './prefs.js';
 import { prefs } from './prefs.js';
 import { hideSplash, veil, loaderHTML } from '/loader.js';
@@ -218,6 +218,7 @@ async function navigate(panel, params = {}) {
     done();
   }
   paintIcons(content);
+  paintSegs(content);
 }
 
 /* ── nav foot: width + theme ─────────────────────────────────── */

@@ -96,14 +96,42 @@ body.nav-compact .nav__list { padding: 10px 8px; }
 .hint { font-size: 12px; color: var(--ink-3); margin-top: 6px; }
 
 /* segmented control */
-.seg { display: flex; gap: 4px; background: var(--surface-2); padding: 4px; border-radius: var(--r-md); }
+.seg {
+  display: flex; gap: 4px; background: var(--surface-2);
+  padding: 4px; border-radius: var(--r-md);
+  position: relative;              /* the thumb below is placed against this */
+}
+
+/* The selection itself, as one element that travels, rather than a background
+   that vanishes here and reappears there. Painted under the labels, so the
+   text stays legible the whole way across. */
+.seg__thumb {
+  position: absolute; top: 4px; bottom: 4px; left: 0; width: 0;
+  border-radius: var(--r-sm);
+  background: var(--surface); box-shadow: var(--shadow-sm);
+  pointer-events: none; opacity: 0;
+  transition: left 260ms cubic-bezier(.22, .61, .36, 1),
+              width 260ms cubic-bezier(.22, .61, .36, 1),
+              opacity 120ms linear;
+}
+
 .seg button {
   flex: 1 1 0; border: 0; background: none; cursor: pointer;
   padding: 7px 8px; border-radius: var(--r-sm);
   font-weight: 700; font-size: 13px; color: var(--ink-2);
-  transition: background var(--speed), color var(--speed);
+  position: relative; z-index: 1;
+  transition: color var(--speed);
 }
-.seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-sm); }
+.seg button:hover { color: var(--ink); }
+/* No background of its own: the thumb is the highlight now. */
+.seg button[aria-pressed="true"] { color: var(--ink); }
+
+/* Without JS — or before it runs — the pressed option still has to look
+   pressed, so the old highlight stays as the fallback and is dropped only
+   once a thumb is actually in place. */
+.seg:not([data-seg]) button[aria-pressed="true"] {
+  background: var(--surface); box-shadow: var(--shadow-sm);
+}
 
 /* Seven weekday toggles. Deliberately the same material as .seg — they do the
    same job — but each is its own on/off rather than one choice out of a set,
@@ -211,6 +239,19 @@ body.nav-compact .nav__list { padding: 10px 8px; }
 
 .row-actions { display: flex; gap: 6px; justify-content: flex-end; }
 
+
+/* Fields that appear because a setting was switched on: they slide in from
+   under the control that revealed them, so the connection is visible. */
+@keyframes field-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: none; }
+}
+.field--enter { animation: field-in 240ms cubic-bezier(.22, .61, .36, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .seg__thumb { transition: none; }
+  .field--enter { animation: none; }
+}
 
 /* ── modal ──────────────────────────────────────────────────── */
 .modal { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; }

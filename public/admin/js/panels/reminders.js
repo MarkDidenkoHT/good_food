@@ -182,11 +182,7 @@ function draw() {
         <th style="width:170px"></th>
       </tr></thead>
       <tbody>${rows.map(rowHTML).join('')}</tbody>
-    </table>
-    <div class="card__body" style="border-top:1px solid var(--line)">
-      <p class="hint" style="margin:0">Расписание проверяется каждые ${TICK_MIN} минут,
-         поэтому напоминание уходит с точностью до ${TICK_MIN} минут. Время местное.</p>
-    </div>`;
+    </table>`;
 
   wrap.querySelectorAll('[data-edit]').forEach((b) => {
     b.onclick = () => openForm(rows.find((r) => r.id == b.dataset.edit));

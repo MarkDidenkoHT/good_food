@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { h, esc, toast, modal, confirmDialog, fmtDate } from '../ui.js';
+import { h, esc, toast, modal, confirmDialog, fmtDate, paintSegs } from '../ui.js';
 import { paintIcons } from '../icons.js';
 import { showLoader } from '/loader.js';
 
@@ -209,6 +209,7 @@ function drawComposer() {
 
   wireComposer();
   paintIcons(body);
+  paintSegs(body);
   countRecipients();
 }
 
