@@ -207,6 +207,12 @@ function draw() {
   wrap.querySelectorAll('[data-invoice]').forEach((b) => {
     b.onclick = () => printInvoice(b.dataset.invoice);
   });
+  // Reuses the deep link the Telegram buttons use: the panel clears its
+  // filters when it is asked to focus a row, so the source order is found
+  // even when the current date range or status would have hidden it.
+  wrap.querySelectorAll('[data-source]').forEach((b) => {
+    b.onclick = () => { location.hash = `orders?focus=${b.dataset.source}`; };
+  });
 
   paintIcons(wrap);
   applyFocus();
@@ -218,7 +224,8 @@ function rowHTML(o) {
   return `
     <tr id="order-row-${o.id}">
       <td class="num">${o.id}</td>
-      <td><span class="pill ${o.kind === 'return' ? 'pill--off' : ''}">${KIND[o.kind] || o.kind}</span></td>
+      <td><span class="pill ${o.kind === 'return' ? 'pill--off' : ''}">${KIND[o.kind] || o.kind}</span>
+        ${sourceNote(o)}</td>
       <td style="font-weight:700">${esc(o.companies?.company_name || '—')}</td>
       <td>${esc(o.users?.user_name || '—')}</td>
       <td>${lines.length
@@ -239,6 +246,20 @@ function rowHTML(o) {
         <button class="btn btn--ghost btn--icon btn--sm" data-invoice="${o.id}" title="Скачать накладную"><span data-icon="print"></span></button>
       </div></td>
     </tr>`;
+}
+
+/* A return made from history knows which order it came out of, and that is
+   the number an admin needs to check it against — so it goes next to the
+   «Возврат» pill rather than somewhere one has to go looking.
+
+   Nothing is shown when there is no source: a return composed freely from the
+   catalogue has none, and neither do returns made before the setting was
+   switched on. A dash there would suggest the link had been lost. */
+function sourceNote(o) {
+  if (o.kind !== 'return' || !o.source_order_id) return '';
+  return `<div class="hint" style="margin:4px 0 0">из заказа
+    <button type="button" class="linkbtn" data-source="${o.source_order_id}"
+            title="Показать заказ №${o.source_order_id}">№${o.source_order_id}</button></div>`;
 }
 
 function decide(id, status) {
@@ -282,19 +303,29 @@ function exportOrders(kind) {
     return toast(kind === 'return' ? 'Возвратов в выборке нет' : 'Заказов в выборке нет', 'err');
   }
 
-  const out = [['№', 'Тип', 'Компания', 'Заказал', 'Позиция', 'Кол-во', 'Цена', 'Сумма', 'Статус', 'Создан']];
+  // The returns file gets one extra column: which order each line came back
+  // from. It is left off the orders file, where it would be empty throughout.
+  const isReturns = kind === 'return';
+  const head = ['№', 'Тип', 'Компания', 'Заказал', 'Позиция', 'Кол-во', 'Цена', 'Сумма',
+                'Статус', 'Создан'];
+  if (isReturns) head.splice(1, 0, 'Из заказа');
+
+  const out = [head];
   for (const o of list) {
     const lines = Array.isArray(o.items) ? o.items : [];
+    const lead = isReturns
+      ? [o.id, o.source_order_id || '', KIND[o.kind]]
+      : [o.id, KIND[o.kind]];
+    const tail = [STATUS[o.status]?.[0] || o.status, fmtDate(o.created_at)];
+    const who = [o.companies?.company_name || '', o.users?.user_name || ''];
+
     // one row per line so the file pivots cleanly in a spreadsheet
     if (!lines.length) {
-      out.push([o.id, KIND[o.kind], o.companies?.company_name || '', o.users?.user_name || '',
-                '', '', '', o.total ?? 0, STATUS[o.status]?.[0] || o.status, fmtDate(o.created_at)]);
+      out.push([...lead, ...who, '', '', '', o.total ?? 0, ...tail]);
       continue;
     }
     for (const l of lines) {
-      out.push([o.id, KIND[o.kind], o.companies?.company_name || '', o.users?.user_name || '',
-                l.name, l.qty, l.cost, l.cost * l.qty,
-                STATUS[o.status]?.[0] || o.status, fmtDate(o.created_at)]);
+      out.push([...lead, ...who, l.name, l.qty, l.cost, l.cost * l.qty, ...tail]);
     }
   }
   downloadXlsx(kind === 'return' ? 'vozvraty' : 'zakazy', out,

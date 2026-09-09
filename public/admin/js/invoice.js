@@ -51,7 +51,13 @@ export function buildInvoice(order, companyName) {
     row([null, TITLE[kind], null, '№', { v: order.id, s: { b: true, color: RED } }]),
     // 2 — address and date
     row([null, { v: `${SUPPLIER.address}   от`, s: { align: 'right' } },
-         { v: dateLabel(order.created_at), s: { b: true, color: RED } }]),
+         { v: dateLabel(order.created_at), s: { b: true, color: RED } },
+         // A return made from a past order says which one, on the document
+         // the two parties actually sign — that is where the claim has to be
+         // checkable. Absent on a return composed from the catalogue.
+         ...(kind === 'return' && order.source_order_id
+           ? ['по заказу', { v: `№${order.source_order_id}`, s: { b: true, color: RED } }]
+           : [])]),
     // 3 — who is handing the goods over
     row([null, 'Отпущено:', from]),
     blank(),
