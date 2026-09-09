@@ -211,8 +211,36 @@ raw Postgres text.
 
 ## FrontPad
 
-Groundwork only — nothing is sent to FrontPad yet. What is in place is the
-mapping an eventual push needs.
+Groundwork only — **nothing is sent to FrontPad yet**. Every path in
+`src/lib/frontpad.js` ends at `console.log`. What is in place is the mapping
+and the two decisions a real push rests on, so the first time the switch is
+turned on in production is not also the first time anyone finds out whether
+the catalogue lines up.
+
+### The switch
+
+**Настройки → FrontPad** stores `{ enabled, mode, batch_time }` under the
+`frontpad` key in `app_settings`. Two modes:
+
+- **При подтверждении** — an order goes out the moment an admin confirms it.
+  Hooked up at `POST /orders/:id/decide`, where it currently logs.
+- **Все за день, разом** — confirmed orders are collected and sent at
+  `batch_time`. `pushDueOrders()` is the entry point; it is wired to nothing
+  yet, and when it is, the caller is the existing five-minute cron tick.
+
+The card says plainly that it is a placeholder. Replacing the `console.log`
+with a real POST should be the only change needed.
+
+### What it refuses to do
+
+- **Returns are never sent.** FrontPad has no counterpart for goods coming
+  back, so pushing one would invent a sale.
+- **An order with an unmapped position is not sent at all.** A silently short
+  order is worse for a kitchen than one that never arrived, so it refuses and
+  names the offending positions rather than sending the rest.
+- No key, or the switch off, and it says so and stops.
+
+### The mapping
 
 Every catalogue position carries a **`frontpad_id`** — its article in
 FrontPad. It is text, not a number: FrontPad articles are free-form and may

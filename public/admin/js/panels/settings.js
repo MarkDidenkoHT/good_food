@@ -17,7 +17,8 @@ let settings = {
     returns_from_history: false,
     cutoff_enabled: false, cutoff_time: '22:00', lock_after_cutoff: true,
     after_cutoff: 'next_day', resume_time: '08:00'
-  }
+  },
+  frontpad: { enabled: false, mode: 'on_confirm', batch_time: '18:00' }
 };
 let orphans = [];
 let root;
@@ -25,7 +26,7 @@ let root;
 /* What the last draw put on screen, so the next one can tell which fields are
    genuinely new and animate only those. A redraw that changes nothing
    structural must not make the whole panel move. */
-let shown = { cutoff: null, blocking: null };
+let shown = { cutoff: null, blocking: null, fp: null, fpBatch: null };
 
 export const settingsPanel = {
   id: 'settings',
@@ -80,6 +81,9 @@ function draw() {
   const allowDelete = !!o.allow_delete_new;
   const editConfirmed = !!o.allow_edit_confirmed;
   const fromHistory = !!o.returns_from_history;
+  const fp = settings.frontpad || {};
+  const fpOn = !!fp.enabled;
+  const fpBatch = fp.mode === 'batch';
 
   body.innerHTML = '';
   const card = frag(`
@@ -220,6 +224,49 @@ function draw() {
           <p class="hint">Утром следующего дня.</p>
         </div>` : ''}` : ''}
       </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card__head"><div class="card__title">FrontPad</div></div>
+      <div class="card__body">
+        <div class="alert" style="margin:0 0 16px">
+          <div class="alert__title">Пока это заготовка</div>
+          <p>Настройка сохраняется, но заказы в FrontPad <b>ещё не отправляются</b>.
+             Вместо отправки в журнал сервера пишется, что именно ушло&nbsp;бы —
+             так видно, что всё сходится, до первой реальной отправки.
+             Артикул каждой позиции задаётся на вкладке «Позиции».</p>
+        </div>
+
+        <div class="field" ${fpOn ? '' : 'style="margin-bottom:0"'}>
+          <span class="field__label">Передача заказов</span>
+          <div class="seg" id="seg-fp">
+            <button data-v="off" aria-pressed="${!fpOn}">Выключена</button>
+            <button data-v="on"  aria-pressed="${fpOn}">Включена</button>
+          </div>
+          <p class="hint">Возвраты не передаются никогда — в FrontPad для них
+             нет соответствия.</p>
+        </div>
+
+        ${fpOn ? `
+        <div class="field" ${fpBatch ? '' : 'style="margin-bottom:0"'}>
+          <span class="field__label">Когда передавать</span>
+          <div class="seg" id="seg-fp-mode">
+            <button data-v="on_confirm" aria-pressed="${!fpBatch}">При подтверждении</button>
+            <button data-v="batch"      aria-pressed="${fpBatch}">Все за день, разом</button>
+          </div>
+          <p class="hint">${fpBatch
+            ? 'Подтверждённые за день заказы уходят одной пачкой в указанное время.'
+            : 'Каждый заказ уходит сразу, как только его подтвердили в панели.'}</p>
+        </div>
+
+        ${fpBatch ? `
+        <div class="field" style="margin-bottom:0">
+          <label class="field__label" for="fp-time">Время передачи</label>
+          <input id="fp-time" type="time" value="${esc(fp.batch_time || '18:00')}">
+          <p class="hint">Местное время. Заказы, подтверждённые после него,
+             уйдут на следующий день.</p>
+        </div>` : ''}` : ''}
+      </div>
     </div>`);
 
   card.querySelectorAll('#seg-cutoff button').forEach((b) => {
@@ -263,13 +310,24 @@ function draw() {
     b.onclick = () => saveNotify(b.dataset.v === 'both');
   });
 
+  card.querySelectorAll('#seg-fp button').forEach((b) => {
+    b.onclick = () => saveFrontpad({ enabled: b.dataset.v === 'on' });
+  });
+  card.querySelectorAll('#seg-fp-mode button').forEach((b) => {
+    b.onclick = () => saveFrontpad({ mode: b.dataset.v });
+  });
+  const fpTime = card.querySelector('#fp-time');
+  if (fpTime) fpTime.onchange = () => saveFrontpad({ batch_time: fpTime.value });
+
   body.append(card);
   if (orphans.length) body.querySelector('#settings-error').append(orphanBox());
 
   // Only the fields that were not there a moment ago slide in.
   if (cutoffOn && shown.cutoff === false) markEntering(body, '#cutoff-time, #seg-lock, #sel-after');
   if (blocking && shown.blocking === false) markEntering(body, '#resume-time');
-  shown = { cutoff: cutoffOn, blocking };
+  if (fpOn && shown.fp === false) markEntering(body, '#seg-fp-mode');
+  if (fpBatch && shown.fpBatch === false) markEntering(body, '#fp-time');
+  shown = { cutoff: cutoffOn, blocking, fp: fpOn, fpBatch };
 
   paintIcons(body);
   paintSegs(body);
@@ -344,6 +402,21 @@ async function saveCatalog(patch) {
     toast('Настройка сохранена');
   } catch (e) {
     settings.catalog = before;
+    draw();
+    toast(e.message, 'err');
+  }
+}
+
+async function saveFrontpad(patch) {
+  const before = settings.frontpad;
+  settings.frontpad = { ...settings.frontpad, ...patch };
+  draw();
+  try {
+    const res = await api.put('/api/admin/settings/frontpad', patch);
+    settle('frontpad', res.value);
+    toast('Настройка сохранена');
+  } catch (e) {
+    settings.frontpad = before;
     draw();
     toast(e.message, 'err');
   }

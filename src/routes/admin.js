@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { supabase, dbError } from '../lib/supabase.js';
 import { requireAdmin } from '../lib/auth.js';
 import { refreshUserNotice, announceOrderDecision } from '../lib/notices.js';
+import { pushOrder, frontpadSettings, FRONTPAD_DEFAULTS } from '../lib/frontpad.js';
 import { sendMessage, notifyAdmins, kitchenGroupId, botConfigured, esc as tgEsc } from '../lib/telegram.js';
 import { uploadImage, removeImage, signedUrl, MAX_BYTES, extFor } from '../lib/storage.js';
 import { ORDER_DEFAULTS, parseTime } from '../lib/orders.js';
@@ -365,6 +366,14 @@ adminRouter.post('/orders/:id/decide', async (req, res) => {
   if (error) return dbError(res, error);
 
   announceOrderDecision(data).catch((e) => console.error('[notices]', e));
+
+  // Placeholder: logs the payload instead of sending it. Only fires in
+  // 'on_confirm' mode — 'batch' collects the day and goes out on a timer.
+  if (status === 'confirmed') {
+    frontpadSettings()
+      .then((fp) => (fp.enabled && fp.mode === 'on_confirm' ? pushOrder(data, 'on_confirm') : null))
+      .catch((e) => console.error('[frontpad]', e));
+  }
   res.json(data);
 });
 
@@ -762,7 +771,8 @@ const IMAGE_SIZES = ['sm', 'md', 'lg'];
 const SETTING_DEFAULTS = {
   catalog: { group_by_category: false, show_images: false, image_size: 'md' },
   notifications: { notify_owner: true },
-  orders: ORDER_DEFAULTS
+  orders: ORDER_DEFAULTS,
+  frontpad: FRONTPAD_DEFAULTS
 };
 
 adminRouter.get('/settings', async (req, res) => {
@@ -808,6 +818,31 @@ adminRouter.put('/settings/orders', async (req, res) => {
 
   const { error } = await supabase.from('app_settings').upsert({
     key: 'orders', value, updated_at: new Date().toISOString()
+  });
+  if (error) return dbError(res, error);
+  res.json({ ok: true, value });
+});
+
+/* Foundation only — the switch is stored and read, but nothing is sent to
+   FrontPad yet (see src/lib/frontpad.js). Two modes: send each order the
+   moment it is confirmed, or collect the day and send it at one time. */
+adminRouter.put('/settings/frontpad', async (req, res) => {
+  const { data: current } = await supabase
+    .from('app_settings').select('value').eq('key', 'frontpad').maybeSingle();
+  const value = { ...SETTING_DEFAULTS.frontpad, ...(current?.value || {}) };
+
+  if ('enabled' in req.body) value.enabled = !!req.body.enabled;
+  if ('mode' in req.body) {
+    value.mode = req.body.mode === 'batch' ? 'batch' : 'on_confirm';
+  }
+  if ('batch_time' in req.body) {
+    const time = parseTime(req.body.batch_time);
+    if (!time) return res.status(400).json({ error: 'Укажите время в формате ЧЧ:ММ' });
+    value.batch_time = time.text;
+  }
+
+  const { error } = await supabase.from('app_settings').upsert({
+    key: 'frontpad', value, updated_at: new Date().toISOString()
   });
   if (error) return dbError(res, error);
   res.json({ ok: true, value });
