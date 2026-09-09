@@ -16,6 +16,7 @@ import { paintIcons } from '../icons.js';
 
 const MAX_TEXT = 1000;
 const TICK_MIN = 5;
+const MAX_ATTEMPTS = 3;   // matches src/lib/reminders.js
 
 /* ISO weekday numbers, Monday first — the order the days are read in here. */
 const WEEK = [
@@ -30,9 +31,18 @@ const PRESETS = [
   ['Выходные', [6, 7]]
 ];
 
+const RUN_STATUS = {
+  sent:    ['Отправлено', 'pill--on'],
+  pending: ['Отправляется', 'pill--warn'],
+  failed:  ['Ошибка', 'pill--off'],
+  skipped: ['Пропущено', 'pill--off']
+};
+
 let rows = [];
+let runs = [];
 let companies = [];
 let users = [];
+let tab = 'list';                 // list | history
 let root;
 
 export const remindersPanel = {
@@ -47,13 +57,16 @@ export const remindersPanel = {
     h(`<button class="btn btn--primary" id="rem-add"><span data-icon="plus"></span>Добавить</button>`)
   ],
 
-  preload: () => ['/api/admin/reminders', '/api/admin/companies', '/api/admin/users'],
+  preload: () => ['/api/admin/reminders', '/api/admin/reminder-runs',
+                  '/api/admin/companies', '/api/admin/users'],
 
   async render(container) {
     root = container;
     root.append(h(`
       <div class="card">
-        <div class="card__head"><div class="card__title">Напоминания</div></div>
+        <div class="card__head">
+          <div class="subtabs" id="rem-tabs" role="tablist"></div>
+        </div>
         <div id="rem-wrap"></div>
       </div>`));
 
@@ -66,8 +79,9 @@ export const remindersPanel = {
 
 async function load(fresh = false) {
   try {
-    [rows, companies, users] = await Promise.all([
+    [rows, runs, companies, users] = await Promise.all([
       api.get('/api/admin/reminders', { fresh }),
+      api.get('/api/admin/reminder-runs', { fresh }),
       api.get('/api/admin/companies', { fresh }),
       api.get('/api/admin/users', { fresh })
     ]);
@@ -138,8 +152,10 @@ function audienceCount(a = {}) {
 /* ── table ───────────────────────────────────────────────────── */
 
 function draw() {
+  drawTabs();
   const wrap = root?.querySelector('#rem-wrap');
   if (!wrap) return;
+  if (tab === 'history') return drawHistory(wrap);
 
   if (!rows.length) {
     wrap.innerHTML = `
@@ -195,6 +211,77 @@ function draw() {
   });
 
   paintIcons(wrap);
+}
+
+function drawTabs() {
+  const bar = root?.querySelector('#rem-tabs');
+  if (!bar) return;
+  const defs = [['list', `Напоминания (${rows.length})`],
+                ['history', `История (${runs.length})`]];
+  bar.innerHTML = '';
+  defs.forEach(([id, label]) => {
+    const b = h(`<button class="subtab" role="tab" aria-selected="${id === tab}">${esc(label)}</button>`);
+    b.onclick = () => { tab = id; draw(); };
+    bar.append(b);
+  });
+}
+
+/* ── history ─────────────────────────────────────────────────── */
+
+/* One row per reminder per day — the same rows the schedule itself reads to
+   decide what still needs doing. An «Ошибка» here is not just a record: the
+   next check will try that send again, and a second row does not appear
+   because a retry updates the day's row rather than adding one. */
+function drawHistory(wrap) {
+  if (!runs.length) {
+    wrap.innerHTML = `
+      <div class="card__body" style="color:var(--ink-3)">
+        <p style="margin:0 0 6px">Отправок пока не было.</p>
+        <p class="hint" style="margin:0">Здесь появится по строке на каждое напоминание
+           за каждый день: во сколько оно должно было уйти, ушло ли, и скольким
+           людям дошло.</p>
+      </div>`;
+    return;
+  }
+
+  wrap.innerHTML = `
+    <table class="table">
+      <thead><tr>
+        <th style="width:110px">Дата</th>
+        <th style="width:90px">План</th>
+        <th style="width:250px">Напоминание</th>
+        <th style="width:130px">Статус</th>
+        <th style="width:100px">Попыток</th>
+        <th style="width:170px">Доставлено</th>
+        <th>Примечание</th>
+        <th style="width:150px">Завершено</th>
+      </tr></thead>
+      <tbody>${runs.map(runHTML).join('')}</tbody>
+    </table>
+    <div class="card__body" style="border-top:1px solid var(--line)">
+      <p class="hint" style="margin:0">Если отправка не удалась, следующая проверка
+         (через ${TICK_MIN} минут) повторит её — до ${MAX_ATTEMPTS} попыток в течение часа
+         после назначенного времени. Отправка кнопкой «Отправить сейчас» сюда не
+         попадает — она видна в разделе «Сообщения».</p>
+    </div>`;
+}
+
+function runHTML(r) {
+  const [label, cls] = RUN_STATUS[r.status] || [r.status, ''];
+  const retried = r.attempts > 1;
+  return `
+    <tr>
+      <td class="num">${esc(r.run_on || '—')}</td>
+      <td class="num">${esc(r.scheduled_at || '—')}</td>
+      <td style="font-weight:700">${esc(r.reminder_name || `#${r.reminder_id}`)}</td>
+      <td><span class="pill ${cls}">${esc(label)}</span></td>
+      <td class="num">${r.attempts}${retried ? ' <span class="pill pill--warn">повтор</span>' : ''}</td>
+      <td class="num">${r.status === 'sent'
+        ? `${r.delivered} / ${r.recipients}${r.failed ? ` · ошибок ${r.failed}` : ''}`
+        : '—'}</td>
+      <td style="color:var(--ink-3)">${esc(r.error || '')}</td>
+      <td class="num">${r.finished_at ? fmtDate(r.finished_at) : '—'}</td>
+    </tr>`;
 }
 
 function rowHTML(r) {

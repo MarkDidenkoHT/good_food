@@ -640,9 +640,22 @@ adminRouter.delete('/reminders/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
+/* The run log: one row per reminder per day, newest first. This is where an
+   admin looks to answer "did it go out, and if not, why" — and it is the same
+   table the tick reads to decide whether a failed send still needs doing. */
+adminRouter.get('/reminder-runs', async (req, res) => {
+  const { data, error } = await supabase
+    .from('reminder_runs')
+    .select('*')
+    .order('started_at', { ascending: false })
+    .limit(200);
+  if (error) return dbError(res, error, 500);
+  res.json(data || []);
+});
+
 /* «Отправить сейчас»: the same send the schedule would do, so what an admin
-   tests is exactly what users will get. It does not touch last_run_on — a
-   test must not eat today's scheduled send. */
+   tests is exactly what users will get. It writes no run row — a test must
+   not consume, or appear to be, today's scheduled send. */
 adminRouter.post('/reminders/:id/test', async (req, res) => {
   if (!botConfigured()) {
     return res.status(503).json({ error: 'Бот не настроен — TELEGRAM_BOT_TOKEN не задан' });

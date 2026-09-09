@@ -33,7 +33,8 @@ the product, and no cron expression is ever typed.
 
 Supabase keeps the clock, the server does the sending:
 
-1. Run `db/migrations/011_reminders.sql` in the Supabase SQL editor.
+1. Run `db/migrations/011_reminders.sql` and `012_reminder_runs.sql` in the
+   Supabase SQL editor.
 2. Set `CRON_SECRET` in the environment (`openssl rand -hex 32`).
 3. Fill the service URL and the same secret into `db/cron_setup.sql` and run
    it. `pg_cron` then calls `POST /api/cron/tick` every five minutes, and that
@@ -47,8 +48,12 @@ Consequences of the five-minute tick worth knowing:
 - A reminder that comes due more than an hour late is skipped rather than sent
   — a server that was down over lunch does not deliver a lunchtime reminder in
   the evening.
-- The day is claimed in the database before anything is sent, so overlapping
-  ticks cannot send twice.
+- Every attempt writes a row in `reminder_runs` — one per reminder per day —
+  and that row is also the claim on the day, so overlapping ticks cannot send
+  twice. Because it records the *outcome* and not just the attempt, a send
+  that failed at 16:00 is retried at 16:05 (up to 3 attempts, within the same
+  hour-long grace window) instead of being lost until tomorrow. The panel
+  shows these rows under **История**.
 - A fired reminder becomes an ordinary broadcast, so it appears in
   **Сообщения** with its delivery counters and can be recalled like any other
   message. «Отправить сейчас» in the panel sends the same thing by hand
