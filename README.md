@@ -176,6 +176,28 @@ longer sold must still be selectable to send back.
 Toggle it from the row pill in **Позиции** (one click, no dialog — it is
 reversible) or from the item form. Apply `db/migrations/009_item_available.sql`.
 
+## FrontPad
+
+Groundwork only — nothing is sent to FrontPad yet. What is in place is the
+mapping an eventual push needs.
+
+Every catalogue position carries a **`frontpad_id`** — its article in
+FrontPad. It is text, not a number: FrontPad articles are free-form and may
+have leading zeros, which a numeric column would eat. A unique index enforces
+one article per position, because two items sharing an article would collapse
+into a single line in FrontPad and lose a sale; the API turns that collision
+into a readable message rather than raw Postgres text.
+
+Edit it in the item form (**Артикул FrontPad**); the **Позиции** table shows
+it as a column and marks the positions still missing one, since those are the
+ones that would block an order from being pushed. The item search matches the
+article as well as the name.
+
+`FRONTPAD_APIKEY` is read from the environment (set on Render). It authorises
+order creation, so it is server-only and must never reach the browser.
+
+Apply `db/migrations/013_frontpad.sql` before deploying this.
+
 ## Broadcasts (Сообщения)
 
 An admin composes one message — up to **1000 characters**, optionally with a

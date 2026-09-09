@@ -206,7 +206,7 @@ adminRouter.post('/items', async (req, res) => {
   const body = pickItem(req.body);
   if (!body.item_name) return res.status(400).json({ error: 'Название обязательно' });
   const { data, error } = await supabase.from('items').insert(body).select().single();
-  if (error) return dbError(res, error);
+  if (error) return itemError(res, error);
   res.status(201).json(data);
 });
 
@@ -218,7 +218,7 @@ adminRouter.patch('/items/:id', async (req, res) => {
 
   const { data, error } = await supabase
     .from('items').update(patch).eq('id', req.params.id).select().single();
-  if (error) return dbError(res, error);
+  if (error) return itemError(res, error);
 
   if ('image_path' in patch && before?.image_path && before.image_path !== patch.image_path) {
     removeImage(before.image_path);
@@ -832,6 +832,16 @@ function pickMaterial(b = {}) {
   return out;
 }
 
+// The only constraint an admin can trip on an item is the unique FrontPad
+// article, and the raw Postgres text for it is unreadable. Everything else
+// falls through to the generic handler.
+function itemError(res, error) {
+  if (error?.code === '23505' && String(error.message).includes('items_frontpad_id_key')) {
+    return res.status(400).json({ error: 'Этот артикул FrontPad уже привязан к другой позиции' });
+  }
+  return dbError(res, error);
+}
+
 function pickItem(b = {}) {
   const out = {};
   if ('item_name' in b) out.item_name = b.item_name?.trim() || null;
@@ -840,6 +850,9 @@ function pickItem(b = {}) {
   if ('image_path' in b) out.image_path = b.image_path?.trim() || null;
   // false takes the item off the order list; it stays orderable-for-return
   if ('available' in b) out.available = b.available !== false;
+  // FrontPad article. Free-form string; blank means "not mapped to FrontPad"
+  // and is stored as NULL so the unique index ignores it.
+  if ('frontpad_id' in b) out.frontpad_id = String(b.frontpad_id ?? '').trim() || null;
   if ('materials' in b) {
     // store a {id, name} snapshot so an item still reads correctly if a
     // material is later renamed or removed

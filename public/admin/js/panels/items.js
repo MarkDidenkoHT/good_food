@@ -80,7 +80,8 @@ function draw() {
   const q = query.trim().toLowerCase();
   const match = (name) => !q || String(name || '').toLowerCase().includes(q);
 
-  if (tab === 'items') drawItems(wrap, items.filter((i) => match(i.item_name)));
+  // positions are also looked up by their FrontPad article when reconciling
+  if (tab === 'items') drawItems(wrap, items.filter((i) => match(i.item_name) || match(i.frontpad_id)));
   if (tab === 'categories') drawCategories(wrap, categories.filter((c) => match(c.category_name)));
   if (tab === 'materials') drawMaterials(wrap, materials.filter((m) => match(m.material_name)));
 
@@ -115,7 +116,9 @@ function drawItems(wrap, list) {
       <thead><tr>
         <th style="width:60px">ID</th><th style="width:56px"></th><th>Название</th><th style="width:170px">Категория</th>
         <th style="width:130px">Заказ</th>
-        <th style="width:110px">Цена</th><th>Сырьё</th><th style="width:110px"></th>
+        <th style="width:110px">Цена</th>
+        <th style="width:120px">FrontPad</th>
+        <th>Сырьё</th><th style="width:110px"></th>
       </tr></thead>
       <tbody>${list.map((i) => `
         <tr${i.available === false ? ' class="row--muted"' : ''}>
@@ -133,6 +136,9 @@ function drawItems(wrap, list) {
             </button>
           </td>
           <td class="num">${money(i.item_cost)}</td>
+          <td>${i.frontpad_id
+            ? `<span class="pill">${esc(i.frontpad_id)}</span>`
+            : `<span class="pill pill--off" title="Позицию нельзя передать в FrontPad">нет артикула</span>`}</td>
           <td>${(Array.isArray(i.materials) ? i.materials : []).length
             ? i.materials.map((m) => `<span class="chip">${esc(m.name)}${
                 (m.qty || 1) > 1 ? ` <span class="chip__qty">&times;${m.qty}</span>` : ''
@@ -359,6 +365,14 @@ function itemForm(item) {
                заказов и доступна для возврата.</p>
           </div>
 
+          <div class="field">
+            <label class="field__label" for="f-item-fp">Артикул FrontPad</label>
+            <input class="input" id="f-item-fp" name="frontpad_id"
+                   value="${esc(item?.frontpad_id || '')}" placeholder="напр. 1024">
+            <p class="hint">Код позиции в FrontPad. Без него заказ с этой позицией
+               нельзя передать в FrontPad. Один артикул — одна позиция.</p>
+          </div>
+
           ${imageFieldHTML(item?.image_path)}
         </div>
 
@@ -394,6 +408,7 @@ function itemForm(item) {
         item_cost: d.item_cost,
         image_path: d.image_path || null,
         available: d.available !== 'off',
+        frontpad_id: d.frontpad_id || null,
         materials: picked
       };
       if (isNew) await api.post('/api/admin/items', payload);
