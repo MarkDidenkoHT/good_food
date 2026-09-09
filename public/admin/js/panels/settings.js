@@ -33,10 +33,12 @@ export const settingsPanel = {
     h(`<button class="btn btn--ghost btn--icon" id="set-refresh" title="Обновить"><span data-icon="refresh"></span></button>`)
   ],
 
+  preload: () => ['/api/admin/settings'],
+
   async render(container) {
     root = container;
     root.append(h(`<div id="settings-body"></div>`));
-    document.getElementById('set-refresh')?.addEventListener('click', load);
+    document.getElementById('set-refresh')?.addEventListener('click', () => load(true));
     await load();
   }
 
@@ -49,9 +51,9 @@ function frag(html) {
   return t;
 }
 
-async function load() {
+async function load(fresh = false) {
   try {
-    settings = await api.get('/api/admin/settings');
+    settings = await api.get('/api/admin/settings', { fresh });
     orphans = [];
     draw();
   } catch (e) {

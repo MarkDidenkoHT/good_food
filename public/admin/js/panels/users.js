@@ -23,6 +23,8 @@ export const usersPanel = {
     h(`<button class="btn btn--primary" id="users-add"><span data-icon="plus"></span>Добавить</button>`)
   ],
 
+  preload: () => ['/api/admin/users', '/api/admin/companies'],
+
   async render(container, params = {}) {
     root = container;
     focusId = params.focus || null;
@@ -45,18 +47,18 @@ export const usersPanel = {
 
     document.getElementById('users-add')?.addEventListener('click', () =>
       (tab === 'companies' ? companyForm() : openForm()));
-    document.getElementById('users-refresh')?.addEventListener('click', () => load());
+    document.getElementById('users-refresh')?.addEventListener('click', () => load(true));
 
     await load();
   }
 
 };
 
-async function load() {
+async function load(fresh = false) {
   try {
     [rows, companies] = await Promise.all([
-      api.get('/api/admin/users'),
-      api.get('/api/admin/companies')
+      api.get('/api/admin/users', { fresh }),
+      api.get('/api/admin/companies', { fresh })
     ]);
     draw();
   } catch (e) {

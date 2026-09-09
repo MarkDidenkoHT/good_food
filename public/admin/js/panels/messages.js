@@ -50,6 +50,8 @@ export const messagesPanel = {
     h(`<button class="btn btn--ghost btn--icon" id="msg-refresh" title="Обновить"><span data-icon="refresh"></span></button>`)
   ],
 
+  preload: () => ['/api/admin/broadcasts', '/api/admin/companies', '/api/admin/users'],
+
   async render(container) {
     root = container;
     root.append(h(`
@@ -60,7 +62,7 @@ export const messagesPanel = {
         <div id="msg-body"></div>
       </div>`));
 
-    document.getElementById('msg-refresh')?.addEventListener('click', () => load());
+    document.getElementById('msg-refresh')?.addEventListener('click', () => load(true));
     await load();
   },
 
@@ -70,13 +72,17 @@ export const messagesPanel = {
   }
 };
 
-async function load() {
+async function load(fresh = false) {
   showLoader(root?.querySelector('#msg-body'), { size: 'sm', count: 4 });
   try {
     [rows, companies, users] = await Promise.all([
-      api.get('/api/admin/broadcasts'),
-      companies.length ? Promise.resolve(companies) : api.get('/api/admin/companies'),
-      users.length ? Promise.resolve(users) : api.get('/api/admin/users')
+      api.get('/api/admin/broadcasts', { fresh }),
+      !fresh && companies.length
+        ? Promise.resolve(companies)
+        : api.get('/api/admin/companies', { fresh }),
+      !fresh && users.length
+        ? Promise.resolve(users)
+        : api.get('/api/admin/users', { fresh })
     ]);
     draw();
   } catch (e) {
@@ -101,7 +107,7 @@ function stopPoll() {
 
 async function refreshRows() {
   try {
-    rows = await api.get('/api/admin/broadcasts');
+    rows = await api.get('/api/admin/broadcasts', { fresh: true });
     if (tab === 'history') drawHistory();
     syncPoll();
   } catch {

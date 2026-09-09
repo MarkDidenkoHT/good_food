@@ -34,6 +34,15 @@ const STATUS = {
 const dayStart = (d) => new Date(`${d}T00:00:00`).toISOString();
 const dayEnd = (d) => new Date(`${d}T23:59:59.999`).toISOString();
 
+/* One place builds the list URL, so what the boot preload warms is exactly
+   what the first render then asks for. */
+function ordersUrl() {
+  const qs = new URLSearchParams();
+  if (filters.from) qs.set('from', dayStart(filters.from));
+  if (filters.to) qs.set('to', dayEnd(filters.to));
+  return `/api/admin/orders${qs.toString() ? `?${qs}` : ''}`;
+}
+
 export const ordersPanel = {
   id: 'orders',
   label: 'Заказы',
@@ -44,6 +53,8 @@ export const ordersPanel = {
   actions: () => [
     h(`<button class="btn btn--ghost btn--icon" id="ord-refresh" title="Обновить"><span data-icon="refresh"></span></button>`)
   ],
+
+  preload: () => [ordersUrl(), '/api/admin/companies'],
 
   async render(container, params = {}) {
     root = container;
@@ -65,22 +76,20 @@ export const ordersPanel = {
         <div id="ord-wrap"></div>
       </div>`));
 
-    document.getElementById('ord-refresh')?.addEventListener('click', load);
+    document.getElementById('ord-refresh')?.addEventListener('click', () => load(true));
     drawToolbar();
     await load();
   }
 };
 
-async function load() {
+async function load(fresh = false) {
   showLoader(root?.querySelector('#ord-wrap'), { size: 'sm', count: 4 });
   try {
-    const qs = new URLSearchParams();
-    if (filters.from) qs.set('from', dayStart(filters.from));
-    if (filters.to) qs.set('to', dayEnd(filters.to));
-
     const [orders, comps] = await Promise.all([
-      api.get(`/api/admin/orders${qs.toString() ? `?${qs}` : ''}`),
-      companies.length ? Promise.resolve(companies) : api.get('/api/admin/companies')
+      api.get(ordersUrl(), { fresh }),
+      !fresh && companies.length
+        ? Promise.resolve(companies)
+        : api.get('/api/admin/companies', { fresh })
     ]);
     rows = orders;
     companies = comps;

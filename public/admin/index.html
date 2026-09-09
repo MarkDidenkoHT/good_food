@@ -11,6 +11,24 @@
 <link rel="stylesheet" href="./css/theme.css">
 <link rel="stylesheet" href="./css/admin.css">
 <link rel="stylesheet" href="/loader.css">
+
+<!-- The module graph is deep enough that discovering it one import at a
+     time costs a visible wait; naming every file here lets the browser
+     fetch the whole panel in one go. -->
+<link rel="modulepreload" href="./js/app.js">
+<link rel="modulepreload" href="./js/api.js">
+<link rel="modulepreload" href="./js/ui.js">
+<link rel="modulepreload" href="./js/icons.js">
+<link rel="modulepreload" href="./js/prefs.js">
+<link rel="modulepreload" href="./js/xlsx.js">
+<link rel="modulepreload" href="./js/invoice.js">
+<link rel="modulepreload" href="/loader.js">
+<link rel="modulepreload" href="./js/panels/orders.js">
+<link rel="modulepreload" href="./js/panels/items.js">
+<link rel="modulepreload" href="./js/panels/users.js">
+<link rel="modulepreload" href="./js/panels/settings.js">
+<link rel="modulepreload" href="./js/panels/messages.js">
+<link rel="modulepreload" href="./js/panels/placeholders.js">
 </head>
 <body>
 
@@ -38,16 +56,21 @@
       <div class="nav__mark">GF</div>
       <div class="nav__name">Good Food<small>Панель управления</small></div>
     </div>
-    <form class="card" id="login-form">
+    <!-- A real login form, method/action and all: the fields are typed so a
+         password manager recognises them and offers to save. The submit is
+         still handled in JS — the action is only there for the browsers that
+         want to see one. -->
+    <form class="card" id="login-form" method="post" action="/api/auth/admin/login">
       <div class="card__body">
         <div class="field">
           <label class="field__label" for="login-chat">Логин</label>
-          <input class="input input--code" id="login-chat" name="chat_id" inputmode="numeric"
-                 autocomplete="off" spellcheck="false" maxlength="20" required autofocus>
+          <input class="input input--code" id="login-chat" name="chat_id" type="text" inputmode="numeric"
+                 autocomplete="username" spellcheck="false" maxlength="20" required autofocus>
         </div>
         <div class="field">
           <label class="field__label" for="login-code">Пароль</label>
-          <input class="input input--code" id="login-code" name="code" autocomplete="one-time-code"
+          <input class="input input--code" id="login-code" name="code" type="password"
+                 autocomplete="current-password"
                  autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="32" required>
         </div>
         <button class="btn btn--primary btn--block" type="submit">Войти</button>

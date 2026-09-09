@@ -30,6 +30,8 @@ export const itemsPanel = {
     h(`<button class="btn btn--primary" id="cat-add"><span data-icon="plus"></span>Добавить</button>`)
   ],
 
+  preload: () => ['/api/admin/items', '/api/admin/categories', '/api/admin/materials'],
+
   async render(container) {
     root = container;
     root.append(h(`
@@ -50,19 +52,19 @@ export const itemsPanel = {
     search.addEventListener('input', () => { query = search.value; draw(); });
 
     document.getElementById('cat-add')?.addEventListener('click', openForm);
-    document.getElementById('cat-refresh')?.addEventListener('click', load);
+    document.getElementById('cat-refresh')?.addEventListener('click', () => load(true));
 
     await load();
   }
 
 };
 
-async function load() {
+async function load(fresh = false) {
   try {
     [items, categories, materials] = await Promise.all([
-      api.get('/api/admin/items'),
-      api.get('/api/admin/categories'),
-      api.get('/api/admin/materials')
+      api.get('/api/admin/items', { fresh }),
+      api.get('/api/admin/categories', { fresh }),
+      api.get('/api/admin/materials', { fresh })
     ]);
     draw();
   } catch (e) {

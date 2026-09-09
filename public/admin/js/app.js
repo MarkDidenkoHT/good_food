@@ -3,7 +3,7 @@ import { paintIcons, icon } from './icons.js';
 import { h, esc, toast } from './ui.js';
 import * as prefsMod from './prefs.js';
 import { prefs } from './prefs.js';
-import { hideSplash, veil } from '/loader.js';
+import { hideSplash, veil, loaderHTML } from '/loader.js';
 import { usersPanel } from './panels/users.js';
 import { itemsPanel } from './panels/items.js';
 import { settingsPanel } from './panels/settings.js';
@@ -18,6 +18,34 @@ const panels = [ordersPanel, itemsPanel, usersPanel, settingsPanel, messagesPane
 const $ = (sel) => document.querySelector(sel);
 let current = null;
 
+/* The splash is the only moment where waiting is free, so everything the app
+   will ask for gets asked for now: every panel's lists, plus the prefs. From
+   then on a panel switch is a cache read.
+
+   MIN_SPLASH_MS keeps the loader on screen long enough to be seen rather
+   than flashed; SPLASH_CAP_MS is the other end — one stuck request must not
+   hold the whole panel behind the splash. */
+const MIN_SPLASH_MS = 2000;
+const SPLASH_CAP_MS = 10_000;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* The boot splash is gone by the time anyone logs in, so the same wait after
+   a successful login gets its own cover. */
+function blockScreen(label) {
+  const el = document.createElement('div');
+  el.className = 'splash';
+  el.innerHTML = loaderHTML({ size: 'lg', count: 5, label });
+  document.body.append(el);
+  return () => { el.classList.add('splash--out'); setTimeout(() => el.remove(), 300); };
+}
+
+function warmAll() {
+  const urls = ['/api/admin/prefs'];
+  panels.forEach((p) => urls.push(...(p.preload?.() || [])));
+  return Promise.race([api.preload(urls), sleep(SPLASH_CAP_MS)]);
+}
+
 /* ── boot ───────────────────────────────────────────────────── */
 prefsMod.loadLocal();
 paintIcons();
@@ -31,7 +59,10 @@ async function start() {
     if (e instanceof Unauthorized) showLogin();
     else toast(e.message, 'err');
   } finally {
-    // whichever way boot went, the splash has done its job
+    // whichever way boot went, the splash has done its job — but not before
+    // it has been up long enough to read. performance.now() is measured from
+    // the navigation, which is when the splash actually appeared.
+    await sleep(Math.max(0, MIN_SPLASH_MS - performance.now()));
     hideSplash();
   }
 }
@@ -51,12 +82,37 @@ function showLogin() {
         chat_id: fd.get('chat_id'),
         code: fd.get('code')
       });
-      showShell();
+
+      // Hand the credentials to the password manager before the form goes
+      // away: a fetch login never navigates, so nothing else prompts to save.
+      offerToSave(fd.get('chat_id'), fd.get('code'));
+
+      const unblock = blockScreen('Загрузка панели…');
+      const started = Date.now();
+      try {
+        await showShell();
+        await sleep(Math.max(0, MIN_SPLASH_MS - (Date.now() - started)));
+      } finally {
+        unblock();
+      }
     } catch (ex) {
       err.textContent = ex instanceof Unauthorized ? 'Неверный логин или пароль' : ex.message;
       err.hidden = false;
     }
   };
+}
+
+/* Chrome and Safari only offer to save when they can see a credential, and
+   with no form navigation the explicit API is the reliable way to give them
+   one. Browsers without it fall back to their own heuristic on the (now
+   correctly typed) fields. */
+function offerToSave(id, password) {
+  try {
+    if (!window.PasswordCredential || !navigator.credentials?.store) return;
+    navigator.credentials
+      .store(new PasswordCredential({ id: String(id), password: String(password), name: String(id) }))
+      .catch(() => {});
+  } catch { /* the constructor throws on an insecure origin — nothing to do */ }
 }
 
 /* ── shell ──────────────────────────────────────────────────── */
@@ -66,6 +122,9 @@ async function showShell() {
 
   buildNav();
   wireChrome();
+
+  // one round of requests for the whole app, while the splash is still up
+  await warmAll();
   await prefsMod.loadRemote();
 
   const { panel, params } = parseHash();
