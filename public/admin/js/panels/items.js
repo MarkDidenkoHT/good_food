@@ -457,7 +457,7 @@ function imageFieldHTML(path) {
   return `
     <div class="field" style="margin-bottom:0">
       <span class="field__label">Изображение</span>
-      <div class="imgpick" id="imgpick">
+      <div class="imgpick imgpick--lg" id="imgpick">
         <div class="imgpick__preview" id="img-preview">
           ${path ? `<img src="${imageSrc(path)}" alt="">` : '<span>нет</span>'}
         </div>

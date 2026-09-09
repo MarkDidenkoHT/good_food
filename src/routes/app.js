@@ -41,6 +41,8 @@ appRouter.get('/catalog', async (req, res) => {
   // still offers them for a return.
   res.json({
     show_images: showImages,
+    // no size to honour when the images are off
+    image_size: showImages ? (settings.data?.value?.image_size || 'md') : 'md',
     items: rows.map(({ image_path, available, ...i }) => ({
       ...i,
       available: available !== false,

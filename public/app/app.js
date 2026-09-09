@@ -22,6 +22,7 @@ const view = document.getElementById('view');
 let me = null;
 let catalog = {
   items: [], categories: [], group_by_category: false, show_images: false,
+  image_size: 'md',
   orders: {
     cutoff_enabled: false, allow_delete_new: false,
     allow_edit_confirmed: false, ordering_blocked: false
@@ -292,6 +293,7 @@ function renderCatalog() {
     html = `<div class="list">${items.map(itemHTML).join('')}</div>`;
   }
 
+  applyImageSize();
   body.innerHTML = blockedBanner() + editingBanner() + html;
   body.querySelector('#edit-cancel')?.addEventListener('click', cancelEdit);
   body.querySelectorAll('[data-plus]').forEach((b) => {
@@ -301,6 +303,13 @@ function renderCatalog() {
     b.onclick = () => bump(Number(b.dataset.minus), -1);
   });
   renderCart();
+}
+
+/* The admin picks one of three sizes; the sizes themselves live in the CSS,
+   so this only has to say which one is on. */
+function applyImageSize() {
+  const size = ['sm', 'md', 'lg'].includes(catalog.image_size) ? catalog.image_size : 'md';
+  document.documentElement.dataset.imgsize = size;
 }
 
 function itemHTML(it) {

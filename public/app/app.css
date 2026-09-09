@@ -74,16 +74,26 @@ input:focus, textarea:focus {
 }
 
 /* ── catalog ─────────────────────────────────────────────────── */
+
+/* Three image sizes, chosen in the admin panel. Everything that scales with
+   the choice reads these two variables, so a size is one line to change and
+   nothing can drift out of step with the rest. */
+:root { --img: 60px; --img-group: 34px; }
+:root[data-imgsize="sm"] { --img: 40px; --img-group: 26px; }
+:root[data-imgsize="lg"] { --img: 80px; --img-group: 44px; }
+
 .group__title {
   padding: 22px 2px 8px; font-size: 12px; font-weight: 800;
   text-transform: uppercase; letter-spacing: .6px; color: var(--ink-3);
   display: flex; align-items: center; gap: 10px;
 }
 .group__img {
-  width: 28px; height: 28px; border-radius: var(--r-sm); object-fit: cover; display: block;
+  width: var(--img-group); height: var(--img-group);
+  border-radius: var(--r-sm); object-fit: cover; display: block;
 }
 .item__img {
-  width: 48px; height: 48px; flex: 0 0 48px; border-radius: var(--r-md);
+  width: var(--img); height: var(--img); flex: 0 0 var(--img);
+  border-radius: var(--r-md);
   object-fit: cover; display: block; background: var(--surface-2);
 }
 .item__img--none { border: 1px dashed var(--line-strong); background: none; }

@@ -598,8 +598,12 @@ adminRouter.delete('/broadcasts/:id', async (req, res) => {
 
 /* ---------- app settings ---------- */
 
+/* image_size is only read when show_images is on; it is kept across a switch
+   off and back on so the choice is not lost. */
+const IMAGE_SIZES = ['sm', 'md', 'lg'];
+
 const SETTING_DEFAULTS = {
-  catalog: { group_by_category: false, show_images: false },
+  catalog: { group_by_category: false, show_images: false, image_size: 'md' },
   notifications: { notify_owner: true },
   orders: ORDER_DEFAULTS
 };
@@ -660,6 +664,12 @@ adminRouter.put('/settings/catalog', async (req, res) => {
 
   if ('group_by_category' in req.body) value.group_by_category = !!req.body.group_by_category;
   if ('show_images' in req.body) value.show_images = !!req.body.show_images;
+  if ('image_size' in req.body) {
+    if (!IMAGE_SIZES.includes(req.body.image_size)) {
+      return res.status(400).json({ error: 'Неизвестный размер изображений' });
+    }
+    value.image_size = req.body.image_size;
+  }
 
   // Grouping the app by category is only coherent if every item has one.
   if (value.group_by_category) {

@@ -67,6 +67,7 @@ function draw() {
   const grouped = !!settings.catalog?.group_by_category;
   const notifyOwner = settings.notifications?.notify_owner !== false;
   const images = !!settings.catalog?.show_images;
+  const imgSize = settings.catalog?.image_size || 'md';
   const o = settings.orders || {};
   const cutoffOn = !!o.cutoff_enabled;
   const lockAfter = o.lock_after_cutoff !== false;
@@ -97,6 +98,16 @@ function draw() {
           </div>
           <p class="hint">Картинки категорий и позиций в мини-приложении.
              Загружаются на вкладке «Позиции».</p>
+        </div>
+
+        <div class="field" style="margin:16px 0 0" ${images ? '' : 'hidden'}>
+          <span class="field__label">Размер изображений</span>
+          <div class="seg" id="seg-img-size">
+            <button data-v="sm" aria-pressed="${imgSize === 'sm'}">Маленькие</button>
+            <button data-v="md" aria-pressed="${imgSize === 'md'}">Средние</button>
+            <button data-v="lg" aria-pressed="${imgSize === 'lg'}">Большие</button>
+          </div>
+          <p class="hint">Насколько крупно позиции показаны в списке: 40, 60 или 80&nbsp;пикселей.</p>
         </div>
         <div id="settings-error"></div>
       </div>
@@ -236,7 +247,11 @@ function draw() {
   });
 
   card.querySelectorAll('#seg-images button').forEach((b) => {
-    b.onclick = () => saveImages(b.dataset.v === 'on');
+    b.onclick = () => saveCatalog({ show_images: b.dataset.v === 'on' });
+  });
+
+  card.querySelectorAll('#seg-img-size button').forEach((b) => {
+    b.onclick = () => saveCatalog({ image_size: b.dataset.v });
   });
 
   card.querySelectorAll('#seg-notify button').forEach((b) => {
@@ -294,9 +309,10 @@ async function saveNotify(notifyOwner) {
   }
 }
 
-async function saveImages(show) {
+/* Both image controls write the same row, one key at a time. */
+async function saveCatalog(patch) {
   try {
-    const res = await api.put('/api/admin/settings/catalog', { show_images: show });
+    const res = await api.put('/api/admin/settings/catalog', patch);
     settings.catalog = res.value;
     draw();
     toast('Настройка сохранена');
