@@ -105,6 +105,22 @@ body.nav-compact .nav__list { padding: 10px 8px; }
 }
 .seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-sm); }
 
+/* Seven weekday toggles. Deliberately the same material as .seg — they do the
+   same job — but each is its own on/off rather than one choice out of a set,
+   so they sit apart instead of inside a shared track. */
+.daypick { display: flex; gap: 6px; flex-wrap: wrap; }
+.daypick button {
+  flex: 1 1 0; min-width: 46px; padding: 9px 4px;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--surface-2); cursor: pointer;
+  font-family: inherit; font-weight: 700; font-size: 13px; color: var(--ink-3);
+  transition: background var(--speed), color var(--speed), border-color var(--speed);
+}
+.daypick button:hover { color: var(--ink-2); }
+.daypick button[aria-pressed="true"] {
+  background: var(--brand); border-color: var(--brand); color: #fff;
+}
+
 /* switch */
 .switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }
 .switch input { position: absolute; opacity: 0; pointer-events: none; }
@@ -195,18 +211,6 @@ body.nav-compact .nav__list { padding: 10px 8px; }
 
 .row-actions { display: flex; gap: 6px; justify-content: flex-end; }
 
-/* ── placeholder / empty ────────────────────────────────────── */
-.placeholder {
-  display: grid; place-items: center; align-content: center; text-align: center;
-  min-height: 60vh; color: var(--ink-3); gap: 10px;
-}
-.placeholder__icon {
-  width: 64px; height: 64px; border-radius: var(--r-lg);
-  background: var(--surface-2); display: grid; place-items: center; color: var(--ink-3);
-}
-.placeholder__icon svg { width: 30px; height: 30px; }
-.placeholder h2 { margin: 6px 0 0; font-size: 18px; color: var(--ink); }
-.placeholder p { margin: 0; max-width: 380px; }
 
 /* ── modal ──────────────────────────────────────────────────── */
 .modal { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; }

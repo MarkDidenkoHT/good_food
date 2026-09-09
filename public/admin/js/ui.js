@@ -1,4 +1,4 @@
-import { icon, paintIcons } from './icons.js';
+import { paintIcons } from './icons.js';
 
 /* ── tiny DOM helper ─────────────────────────────────────────── */
 export function h(html) {
@@ -93,16 +93,6 @@ export function confirmDialog(title, text, onYes, submitLabel = 'Удалить'
     submitLabel,
     onSubmit: onYes
   });
-}
-
-/* ── placeholder page ────────────────────────────────────────── */
-export function placeholder(title, text) {
-  return h(`
-    <div class="placeholder">
-      <div class="placeholder__icon">${icon('construction')}</div>
-      <h2>${esc(title)}</h2>
-      <p>${esc(text)}</p>
-    </div>`);
 }
 
 export const fmtDate = (iso) =>

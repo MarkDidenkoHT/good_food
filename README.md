@@ -18,12 +18,41 @@ public/app/            Telegram mini-app
 
 Three blocks: left nav (300px) · main content · right accessibility panel (300px).
 
-- Nav: Заказы, Позиции, Пользователи, Настройки, Сообщения, Cron
+- Nav: Заказы, Позиции, Пользователи, Настройки, Сообщения, Напоминания
 - Theme (light/dark) and the compact toggle sit at the bottom of the nav.
 - Preferences persist in `localStorage` and sync to `public.admin_prefs`.
 - Working today: **Заказы** (confirm/reject), **Позиции** (items, categories,
   materials), **Пользователи** (users + companies), **Настройки**,
-  **Сообщения** (broadcasts). Cron is still a placeholder.
+  **Сообщения** (broadcasts), **Напоминания** (scheduled messages).
+
+### Напоминания
+
+Recurring bot messages on a weekly timetable. An admin fills in a name, the
+weekdays, a time, the text and who gets it — the word *cron* appears nowhere in
+the product, and no cron expression is ever typed.
+
+Supabase keeps the clock, the server does the sending:
+
+1. Run `db/migrations/011_reminders.sql` in the Supabase SQL editor.
+2. Set `CRON_SECRET` in the environment (`openssl rand -hex 32`).
+3. Fill the service URL and the same secret into `db/cron_setup.sql` and run
+   it. `pg_cron` then calls `POST /api/cron/tick` every five minutes, and that
+   endpoint sends whatever is due.
+
+Consequences of the five-minute tick worth knowing:
+
+- A reminder set for 16:02 goes out at 16:05 — times are honoured to five
+  minutes, and the panel says so.
+- The time is a wall clock in `Europe/Chisinau`, so it survives DST.
+- A reminder that comes due more than an hour late is skipped rather than sent
+  — a server that was down over lunch does not deliver a lunchtime reminder in
+  the evening.
+- The day is claimed in the database before anything is sent, so overlapping
+  ticks cannot send twice.
+- A fired reminder becomes an ordinary broadcast, so it appears in
+  **Сообщения** with its delivery counters and can be recalled like any other
+  message. «Отправить сейчас» in the panel sends the same thing by hand
+  without consuming the day's scheduled send.
 
 Login: **chat_id + access code** of a `public.users` row with `role = 'admin'`
 → signed httpOnly cookie (12h). Both must match the same row. Owner codes are

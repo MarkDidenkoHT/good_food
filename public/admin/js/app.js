@@ -9,11 +9,10 @@ import { itemsPanel } from './panels/items.js';
 import { settingsPanel } from './panels/settings.js';
 import { ordersPanel } from './panels/orders.js';
 import { messagesPanel } from './panels/messages.js';
-import { cronPanel } from './panels/placeholders.js';
+import { remindersPanel } from './panels/reminders.js';
 
-/* Nav order. Users sits first while it is the only working panel; the final
-   order is orders → items → users → settings → messages → cron. */
-const panels = [ordersPanel, itemsPanel, usersPanel, settingsPanel, messagesPanel, cronPanel];
+/* Nav order: orders → items → users → settings → messages → reminders. */
+const panels = [ordersPanel, itemsPanel, usersPanel, settingsPanel, messagesPanel, remindersPanel];
 
 const $ = (sel) => document.querySelector(sel);
 let current = null;

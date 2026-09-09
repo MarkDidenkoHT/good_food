@@ -7,6 +7,7 @@ import { uploadImage, removeImage, signedUrl, MAX_BYTES, extFor } from '../lib/s
 import { ORDER_DEFAULTS, parseTime } from '../lib/orders.js';
 import { resolveAudience, normaliseAudience, deliver, recall, MAX_TEXT }
   from '../lib/broadcasts.js';
+import { validate as validateReminder } from '../lib/reminders.js';
 import express from 'express';
 
 export const adminRouter = Router();
@@ -594,6 +595,98 @@ adminRouter.delete('/broadcasts/:id', async (req, res) => {
   if (error) return dbError(res, error);
   if (broadcast.image_path) await removeImage(broadcast.image_path);
   res.json({ ok: true });
+});
+
+/* ---------- reminders (Напоминания) ---------- */
+
+/* Recurring messages on a weekly timetable. The panel shows the schedule in
+   the admin's own words — days, a time, who — and nothing here or on screen
+   ever says "cron"; db/cron_setup.sql holds the machinery that ticks. */
+
+adminRouter.get('/reminders', async (req, res) => {
+  const { data, error } = await supabase
+    .from('reminders').select('*').order('id');
+  if (error) return dbError(res, error, 500);
+  res.json(data || []);
+});
+
+adminRouter.post('/reminders', async (req, res) => {
+  const { value, error: invalid } = validateReminder(req.body);
+  if (invalid) return res.status(400).json({ error: invalid });
+
+  const { data, error } = await supabase.from('reminders').insert({
+    ...value,
+    enabled: 'enabled' in req.body ? !!req.body.enabled : true
+  }).select().single();
+  if (error) return dbError(res, error);
+  res.status(201).json(data);
+});
+
+adminRouter.patch('/reminders/:id', async (req, res) => {
+  const { value, error: invalid } = validateReminder(req.body, { partial: true });
+  if (invalid) return res.status(400).json({ error: invalid });
+
+  const { data, error } = await supabase.from('reminders')
+    .update({ ...value, updated_at: new Date().toISOString() })
+    .eq('id', req.params.id).select().maybeSingle();
+  if (error) return dbError(res, error);
+  if (!data) return res.status(404).json({ error: 'Напоминание не найдено' });
+  res.json(data);
+});
+
+adminRouter.delete('/reminders/:id', async (req, res) => {
+  const { error } = await supabase.from('reminders').delete().eq('id', req.params.id);
+  if (error) return dbError(res, error);
+  res.json({ ok: true });
+});
+
+/* «Отправить сейчас»: the same send the schedule would do, so what an admin
+   tests is exactly what users will get. It does not touch last_run_on — a
+   test must not eat today's scheduled send. */
+adminRouter.post('/reminders/:id/test', async (req, res) => {
+  if (!botConfigured()) {
+    return res.status(503).json({ error: 'Бот не настроен — TELEGRAM_BOT_TOKEN не задан' });
+  }
+
+  const { data: reminder } = await supabase
+    .from('reminders').select('*').eq('id', req.params.id).maybeSingle();
+  if (!reminder) return res.status(404).json({ error: 'Напоминание не найдено' });
+
+  let recipients;
+  try {
+    recipients = await resolveAudience(reminder.audience || {});
+  } catch (e) {
+    return dbError(res, e, 500);
+  }
+  if (!recipients.length) {
+    return res.status(400).json({ error: 'В выборке нет пользователей с Telegram' });
+  }
+
+  const { data: broadcast, error } = await supabase.from('broadcasts').insert({
+    sent_by: req.admin.id,
+    sent_by_name: `Напоминание (вручную): ${reminder.name}`,
+    text: reminder.text,
+    audience: reminder.audience || {},
+    reminder_id: reminder.id,
+    status: 'sending',
+    recipients: recipients.length
+  }).select().single();
+  if (error) return dbError(res, error);
+
+  const { error: tErr } = await supabase.from('broadcast_targets').insert(
+    recipients.map((u) => ({
+      broadcast_id: broadcast.id,
+      user_id: u.id,
+      user_name: u.user_name,
+      company_id: u.company_id,
+      chat_id: u.chat_id
+    })));
+  if (tErr) return dbError(res, tErr);
+
+  deliver(broadcast.id, reminder.text, null)
+    .catch((e) => console.error('[reminders] manual send failed:', e));
+
+  res.status(201).json({ ok: true, recipients: recipients.length });
 });
 
 /* ---------- app settings ---------- */

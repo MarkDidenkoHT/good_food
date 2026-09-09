@@ -78,6 +78,21 @@ export const localDate = (date = new Date()) => {
   return `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
 };
 
+/* The local wall clock as the scheduler needs it: which calendar day it is
+   here, which weekday that is (ISO: Monday = 1 … Sunday = 7), and how far
+   into the day we are. Derived from the same zone as everything else, so a
+   reminder set for 16:00 is 16:00 here whatever the server's own clock says
+   and whichever side of a DST change the day falls on. */
+export function localNow(date = new Date()) {
+  const p = localParts(date);
+  const day = new Date(Date.UTC(p.year, p.month - 1, p.day)).getUTCDay();
+  return {
+    date: localDate(date),
+    weekday: day === 0 ? 7 : day,
+    minutes: p.hour * 60 + p.minute
+  };
+}
+
 export function parseTime(value) {
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(value || '').trim());
   if (!m) return null;
