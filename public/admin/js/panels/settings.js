@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { h, esc, toast, paintSegs } from '../ui.js';
+import { h, esc, toast, paintSegs, confirmDialog } from '../ui.js';
 import { paintIcons } from '../icons.js';
 
 /* Grouping the catalog by category only works if every item has one, so that
@@ -18,15 +18,17 @@ let settings = {
     cutoff_enabled: false, cutoff_time: '22:00', lock_after_cutoff: true,
     after_cutoff: 'next_day', resume_time: '08:00'
   },
-  frontpad: { enabled: false, mode: 'on_confirm', batch_time: '18:00' }
+  frontpad: { enabled: false, simulation: true, verbose: true, send_returns: false, delivery_time: '10:00' }
 };
 let orphans = [];
 let root;
+let fpLog = null;          // { configured, rows } — loaded lazily with the card
+let fpTest = null;         // last «Проверить связь» answer
 
 /* What the last draw put on screen, so the next one can tell which fields are
    genuinely new and animate only those. A redraw that changes nothing
    structural must not make the whole panel move. */
-let shown = { cutoff: null, blocking: null, fp: null, fpBatch: null };
+let shown = { cutoff: null, blocking: null, fp: null };
 
 export const settingsPanel = {
   id: 'settings',
@@ -62,6 +64,7 @@ async function load(fresh = false) {
     settings = await api.get('/api/admin/settings', { fresh });
     orphans = [];
     draw();
+    loadFpLog();
   } catch (e) {
     toast(e.message, 'err');
   }
@@ -83,7 +86,9 @@ function draw() {
   const fromHistory = !!o.returns_from_history;
   const fp = settings.frontpad || {};
   const fpOn = !!fp.enabled;
-  const fpBatch = fp.mode === 'batch';
+  const fpSim = fp.simulation !== false;
+  const fpVerbose = fp.verbose !== false;
+  const fpReturns = !!fp.send_returns;
 
   body.innerHTML = '';
   const card = frag(`
@@ -229,13 +234,19 @@ function draw() {
     <div class="card" style="margin-top:16px">
       <div class="card__head"><div class="card__title">FrontPad</div></div>
       <div class="card__body">
+        ${fpOn && fpSim ? `
         <div class="alert" style="margin:0 0 16px">
-          <div class="alert__title">Пока это заготовка</div>
-          <p>Настройка сохраняется, но заказы в FrontPad <b>ещё не отправляются</b>.
-             Вместо отправки в журнал сервера пишется, что именно ушло&nbsp;бы —
-             так видно, что всё сходится, до первой реальной отправки.
-             Артикул каждой позиции задаётся на вкладке «Позиции».</p>
-        </div>
+          <div class="alert__title">Режим симуляции</div>
+          <p>Заказ собирается полностью (артикулы, дата, телефон) и пишется в
+             журнал ниже, но <b>в FrontPad ничего не уходит</b>. Когда в журнале
+             всё сходится — переключите на «Боевой».</p>
+        </div>` : ''}
+        ${fpOn && !fpSim ? `
+        <div class="alert alert--err" style="margin:0 0 16px">
+          <div class="alert__title">Боевой режим</div>
+          <p>Каждый подтверждённый заказ создаётся в FrontPad. Если FrontPad
+             откажет — заказ не подтвердится, и вы увидите причину.</p>
+        </div>` : ''}
 
         <div class="field" ${fpOn ? '' : 'style="margin-bottom:0"'}>
           <span class="field__label">Передача заказов</span>
@@ -243,30 +254,61 @@ function draw() {
             <button data-v="off" aria-pressed="${!fpOn}">Выключена</button>
             <button data-v="on"  aria-pressed="${fpOn}">Включена</button>
           </div>
-          <p class="hint">Возвраты не передаются никогда — в FrontPad для них
-             нет соответствия.</p>
+          <p class="hint">Заказ уходит в FrontPad в момент, когда его
+             подтверждают в панели. Артикул каждой позиции задаётся на вкладке «Позиции».</p>
         </div>
 
         ${fpOn ? `
-        <div class="field" ${fpBatch ? '' : 'style="margin-bottom:0"'}>
-          <span class="field__label">Когда передавать</span>
-          <div class="seg" id="seg-fp-mode">
-            <button data-v="on_confirm" aria-pressed="${!fpBatch}">При подтверждении</button>
-            <button data-v="batch"      aria-pressed="${fpBatch}">Все за день, разом</button>
+        <div class="field">
+          <span class="field__label">Режим</span>
+          <div class="seg" id="seg-fp-sim">
+            <button data-v="on"  aria-pressed="${fpSim}">Симуляция</button>
+            <button data-v="off" aria-pressed="${!fpSim}">Боевой</button>
           </div>
-          <p class="hint">${fpBatch
-            ? 'Подтверждённые за день заказы уходят одной пачкой в указанное время.'
-            : 'Каждый заказ уходит сразу, как только его подтвердили в панели.'}</p>
         </div>
 
-        ${fpBatch ? `
+        <div class="field">
+          <label class="field__label" for="fp-deliv">Время доставки в FrontPad</label>
+          <input id="fp-deliv" type="time" value="${esc(fp.delivery_time || '10:00')}">
+          <p class="hint">Дата доставки — следующий день после дня заказа, в это время.</p>
+        </div>
+
+        <div class="field">
+          <span class="field__label">Возвраты</span>
+          <div class="seg" id="seg-fp-ret">
+            <button data-v="off" aria-pressed="${!fpReturns}">Не передавать</button>
+            <button data-v="on"  aria-pressed="${fpReturns}">Передавать</button>
+          </div>
+          <p class="hint">${fpReturns
+            ? 'Возвраты уходят с «Артикулом возврата FrontPad» каждой позиции.'
+            : 'Возвраты в FrontPad не уходят.'}</p>
+        </div>
+
+        <div class="field">
+          <span class="field__label">Подробные логи сервера</span>
+          <div class="seg" id="seg-fp-verbose">
+            <button data-v="on"  aria-pressed="${fpVerbose}">Включены</button>
+            <button data-v="off" aria-pressed="${!fpVerbose}">Кратко</button>
+          </div>
+          <p class="hint">Карта артикулов и каждая строка заказа в логах Render.
+             Журнал ниже ведётся в любом случае.</p>
+        </div>` : ''}
+
         <div class="field" style="margin-bottom:0">
-          <label class="field__label" for="fp-time">Время передачи</label>
-          <input id="fp-time" type="time" value="${esc(fp.batch_time || '18:00')}">
-          <p class="hint">Местное время. Заказы, подтверждённые после него,
-             уйдут на следующий день.</p>
-        </div>` : ''}` : ''}
+          <span class="field__label">Связь с FrontPad</span>
+          <button class="btn btn--sm" id="fp-test">Проверить связь</button>
+          <div id="fp-test-out">${fpTestHTML()}</div>
+        </div>
       </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card__head">
+        <div class="card__title">Журнал FrontPad</div>
+        <div style="flex:1 1 auto"></div>
+        <button class="btn btn--ghost btn--sm" id="fp-log-refresh">Обновить</button>
+      </div>
+      <div id="fp-log">${fpLogHTML()}</div>
     </div>`);
 
   card.querySelectorAll('#seg-cutoff button').forEach((b) => {
@@ -313,11 +355,28 @@ function draw() {
   card.querySelectorAll('#seg-fp button').forEach((b) => {
     b.onclick = () => saveFrontpad({ enabled: b.dataset.v === 'on' });
   });
-  card.querySelectorAll('#seg-fp-mode button').forEach((b) => {
-    b.onclick = () => saveFrontpad({ mode: b.dataset.v });
+  card.querySelectorAll('#seg-fp-sim button').forEach((b) => {
+    b.onclick = () => {
+      const sim = b.dataset.v === 'on';
+      if (!sim && settings.frontpad?.simulation !== false) {
+        return confirmDialog('Боевой режим FrontPad',
+          'С этого момента каждый подтверждённый заказ будет создаваться в FrontPad по-настоящему. Включить?',
+          () => saveFrontpad({ simulation: false }), 'Включить');
+      }
+      saveFrontpad({ simulation: sim });
+    };
   });
-  const fpTime = card.querySelector('#fp-time');
-  if (fpTime) fpTime.onchange = () => saveFrontpad({ batch_time: fpTime.value });
+  card.querySelectorAll('#seg-fp-ret button').forEach((b) => {
+    b.onclick = () => saveFrontpad({ send_returns: b.dataset.v === 'on' });
+  });
+  card.querySelectorAll('#seg-fp-verbose button').forEach((b) => {
+    b.onclick = () => saveFrontpad({ verbose: b.dataset.v === 'on' });
+  });
+  const fpDeliv = card.querySelector('#fp-deliv');
+  if (fpDeliv) fpDeliv.onchange = () => saveFrontpad({ delivery_time: fpDeliv.value });
+
+  card.querySelector('#fp-test').onclick = runFpTest;
+  card.querySelector('#fp-log-refresh').onclick = loadFpLog;
 
   body.append(card);
   if (orphans.length) body.querySelector('#settings-error').append(orphanBox());
@@ -325,9 +384,8 @@ function draw() {
   // Only the fields that were not there a moment ago slide in.
   if (cutoffOn && shown.cutoff === false) markEntering(body, '#cutoff-time, #seg-lock, #sel-after');
   if (blocking && shown.blocking === false) markEntering(body, '#resume-time');
-  if (fpOn && shown.fp === false) markEntering(body, '#seg-fp-mode');
-  if (fpBatch && shown.fpBatch === false) markEntering(body, '#fp-time');
-  shown = { cutoff: cutoffOn, blocking, fp: fpOn, fpBatch };
+  if (fpOn && shown.fp === false) markEntering(body, '#seg-fp-sim, #fp-deliv, #seg-fp-ret, #seg-fp-verbose');
+  shown = { cutoff: cutoffOn, blocking, fp: fpOn };
 
   paintIcons(body);
   paintSegs(body);
@@ -420,6 +478,76 @@ async function saveFrontpad(patch) {
     draw();
     toast(e.message, 'err');
   }
+}
+
+/* ── FrontPad: connection test and log ─────────────────────────────── */
+
+function fpTestHTML() {
+  if (!fpTest) return '';
+  if (fpTest.loading) return '<p class="hint">Проверяю…</p>';
+  if (!fpTest.ok) return `<div class="alert alert--err" style="margin:8px 0 0"><p>${esc(fpTest.error)}</p></div>`;
+  return `<p class="hint" style="color:var(--ok, inherit)">Связь есть. Товаров в FrontPad: ${fpTest.products}.</p>
+    ${fpTest.unknown?.length ? `
+      <div class="alert alert--err" style="margin:8px 0 0">
+        <div class="alert__title">FrontPad не знает эти артикулы</div>
+        <ul class="alert__list">${fpTest.unknown.map((u) =>
+          `<li>«${esc(u.name)}» — ${esc(u.article)}${u.kind === 'return' ? ' (возврат)' : ''}</li>`).join('')}</ul>
+      </div>` : '<p class="hint">Все артикулы позиций найдены в FrontPad.</p>'}`;
+}
+
+async function runFpTest() {
+  fpTest = { loading: true };
+  const out = root?.querySelector('#fp-test-out');
+  if (out) out.innerHTML = fpTestHTML();
+  try {
+    fpTest = await api.post('/api/admin/frontpad/test', {});
+  } catch (e) {
+    fpTest = { ok: false, error: e.message };
+  }
+  const again = root?.querySelector('#fp-test-out');
+  if (again) again.innerHTML = fpTestHTML();
+}
+
+function fpLogHTML() {
+  if (!fpLog) return '<div class="card__body hint">Загрузка…</div>';
+  const warn = fpLog.configured ? '' :
+    '<div class="card__body" style="padding-bottom:0"><p class="hint">FRONTPAD_APIKEY на сервере не задан — работает только симуляция.</p></div>';
+  if (!fpLog.rows.length) return `${warn}<div class="card__body hint">Записей пока нет.</div>`;
+  return `${warn}
+    <table class="table">
+      <thead><tr>
+        <th style="width:150px">Когда</th><th style="width:80px">Заказ</th>
+        <th style="width:130px">Итог</th><th>Подробности</th>
+      </tr></thead>
+      <tbody>${fpLog.rows.map((r) => {
+        const verdict = r.simulated
+          ? `<span class="pill">${r.ok ? 'симуляция' : 'симуляция: ошибка'}</span>`
+          : `<span class="pill ${r.ok ? 'pill--on' : 'pill--off'}">${r.ok ? 'отправлен' : 'ошибка'}</span>`;
+        const detail = [
+          r.action !== 'new_order' ? esc(r.action) : '',
+          r.error ? `<b>${esc(r.error)}</b>` : '',
+          r.request ? `<details><summary>запрос</summary><pre style="white-space:pre-wrap;margin:4px 0">${esc(JSON.stringify(r.request, null, 1))}</pre></details>` : '',
+          r.response ? `<details><summary>ответ (HTTP ${r.http_status ?? '—'})</summary><pre style="white-space:pre-wrap;margin:4px 0">${esc(r.response.slice(0, 3000))}</pre></details>` : ''
+        ].filter(Boolean).join('');
+        return `<tr>
+          <td class="num">${esc(new Date(r.created_at).toLocaleString('ru-RU'))}</td>
+          <td class="num">${r.order_id ? `#${r.order_id}` : '—'}</td>
+          <td>${verdict}</td>
+          <td>${detail || '—'}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+}
+
+async function loadFpLog() {
+  try {
+    fpLog = await api.get('/api/admin/frontpad/log?limit=50', { fresh: true });
+  } catch (e) {
+    fpLog = { configured: true, rows: [] };
+    toast(e.message, 'err');
+  }
+  const el = root?.querySelector('#fp-log');
+  if (el) el.innerHTML = fpLogHTML();
 }
 
 async function saveOrders(patch) {

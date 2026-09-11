@@ -211,34 +211,44 @@ raw Postgres text.
 
 ## FrontPad
 
-Groundwork only — **nothing is sent to FrontPad yet**. Every path in
-`src/lib/frontpad.js` ends at `console.log`. What is in place is the mapping
-and the two decisions a real push rests on, so the first time the switch is
-turned on in production is not also the first time anyone finds out whether
-the catalogue lines up.
+A port of the old Google Sheets script: when an admin confirms an order,
+`POST /orders/:id/decide` calls `pushOrder()` in `src/lib/frontpad.js`
+**before** changing the status. If FrontPad refuses, the order stays «Новый»
+and the admin sees the reason in the dialog — as the old «Завершить» did.
 
-### The switch
+Request: `POST https://app.frontpad.ru/api/index.php?new_order`,
+form-urlencoded — `secret`, `name` (company), `descr` (`Company #id — comment`),
+`datetime` (service day + 1 at `delivery_time`), `phone` (company phone, only
+if filled), `product[i]` / `product_kol[i]`.
 
-**Настройки → FrontPad** stores `{ enabled, mode, batch_time }` under the
-`frontpad` key in `app_settings`. Two modes:
+### Settings (Настройки → FrontPad, `app_settings.frontpad`)
 
-- **При подтверждении** — an order goes out the moment an admin confirms it.
-  Hooked up at `POST /orders/:id/decide`, where it currently logs.
-- **Все за день, разом** — confirmed orders are collected and sent at
-  `batch_time`. `pushDueOrders()` is the entry point; it is wired to nothing
-  yet, and when it is, the caller is the existing five-minute cron tick.
+| key | default | meaning |
+|---|---|---|
+| `enabled` | false | send at all |
+| `simulation` | **true** | build and log everything, send nothing |
+| `verbose` | true | full trail in Render logs (article map, every line) |
+| `send_returns` | false | send returns with `items.frontpad_return_id` |
+| `delivery_time` | 10:00 | time part of FrontPad `datetime` |
 
-The card says plainly that it is a placeholder. Replacing the `console.log`
-with a real POST should be the only change needed.
+Switching to «Боевой» asks for confirmation. **Проверить связь** calls
+`get_products` and lists our articles FrontPad does not know.
+
+### Tracking
+
+Each order carries `frontpad_status` (`none | simulated | sent | failed`),
+`frontpad_order_id`, `frontpad_order_number`, `frontpad_error`,
+`frontpad_sent_at`. A `sent` order is never sent again; a confirmed order in
+any other state gets an «В FrontPad» button (`POST /orders/:id/frontpad`).
+Every attempt — simulated or real, without the key — lands in
+`frontpad_log`, shown under the settings card.
 
 ### What it refuses to do
 
-- **Returns are never sent.** FrontPad has no counterpart for goods coming
-  back, so pushing one would invent a sale.
-- **An order with an unmapped position is not sent at all.** A silently short
-  order is worse for a kitchen than one that never arrived, so it refuses and
-  names the offending positions rather than sending the rest.
-- No key, or the switch off, and it says so and stops.
+- **Returns are not sent** unless `send_returns` is on.
+- **An order with an unmapped position is not sent at all** (in simulation
+  too — that is what simulation is for). It names the positions.
+- No key in live mode → refused with a message.
 
 ### The mapping
 
@@ -257,7 +267,8 @@ article as well as the name.
 `FRONTPAD_APIKEY` is read from the environment (set on Render). It authorises
 order creation, so it is server-only and must never reach the browser.
 
-Apply `db/migrations/013_frontpad.sql` before deploying this.
+Apply `db/migrations/013_frontpad.sql` and `014_frontpad_send.sql` before
+deploying this.
 
 ## Broadcasts (Сообщения)
 

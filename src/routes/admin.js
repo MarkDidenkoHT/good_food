@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { supabase, dbError } from '../lib/supabase.js';
 import { requireAdmin } from '../lib/auth.js';
 import { refreshUserNotice, announceOrderDecision } from '../lib/notices.js';
-import { pushOrder, frontpadSettings, FRONTPAD_DEFAULTS } from '../lib/frontpad.js';
+import { pushOrder, FRONTPAD_DEFAULTS, frontpadConfigured, testConnection, recentLog }
+  from '../lib/frontpad.js';
 import { sendMessage, notifyAdmins, kitchenGroupId, botConfigured, esc as tgEsc } from '../lib/telegram.js';
 import { uploadImage, removeImage, signedUrl, MAX_BYTES, extFor } from '../lib/storage.js';
 import { ORDER_DEFAULTS, parseTime } from '../lib/orders.js';
@@ -351,30 +352,67 @@ adminRouter.post('/orders/:id/decide', async (req, res) => {
   }
 
   const { data: current, error: findErr } = await supabase
-    .from('orders').select('id, status').eq('id', req.params.id).maybeSingle();
+    .from('orders').select('*').eq('id', req.params.id).maybeSingle();
   if (findErr) return dbError(res, findErr, 500);
   if (!current) return res.status(404).json({ error: 'Заказ не найден' });
   if (current.status !== 'new') {
     return res.status(409).json({ error: 'Заказ уже обработан' });
   }
 
+  // FrontPad goes first, as in the old script: if it refuses, the order is
+  // NOT confirmed and the admin sees why. Off / return / simulation pass.
+  let frontpad = null;
+  if (status === 'confirmed') {
+    frontpad = await pushOrder(current);
+    if (!frontpad.ok) return res.status(502).json({ error: frontpad.error, frontpad });
+  }
+
+  // .eq('status', 'new') so a second click racing this one cannot decide twice
   const { data, error } = await supabase
     .from('orders')
     .update({ status, decided_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq('id', req.params.id)
-    .select().single();
+    .eq('status', 'new')
+    .select().maybeSingle();
   if (error) return dbError(res, error);
+  if (!data) return res.status(409).json({ error: 'Заказ уже обработан' });
 
   announceOrderDecision(data).catch((e) => console.error('[notices]', e));
+  res.json({ ...data, frontpad });
+});
 
-  // Placeholder: logs the payload instead of sending it. Only fires in
-  // 'on_confirm' mode — 'batch' collects the day and goes out on a timer.
-  if (status === 'confirmed') {
-    frontpadSettings()
-      .then((fp) => (fp.enabled && fp.mode === 'on_confirm' ? pushOrder(data, 'on_confirm') : null))
-      .catch((e) => console.error('[frontpad]', e));
+/* Resend a confirmed order — for one confirmed while the integration was off
+   or in simulation, or one whose send failed. A 'sent' order is refused. */
+adminRouter.post('/orders/:id/frontpad', async (req, res) => {
+  const { data: order, error } = await supabase
+    .from('orders').select('*').eq('id', req.params.id).maybeSingle();
+  if (error) return dbError(res, error, 500);
+  if (!order) return res.status(404).json({ error: 'Заказ не найден' });
+  if (order.status !== 'confirmed') {
+    return res.status(409).json({ error: 'Передать можно только подтверждённый заказ' });
   }
-  res.json(data);
+  if (order.frontpad_status === 'sent') {
+    return res.status(409).json({ error: `Уже передан в FrontPad (№${order.frontpad_order_number || order.frontpad_order_id})` });
+  }
+  const result = await pushOrder(order);
+  if (!result.ok) return res.status(502).json({ error: result.error });
+  if (result.skipped) {
+    const why = { disabled: 'Передача в FrontPad выключена', return: 'Передача возвратов выключена' };
+    return res.status(409).json({ error: why[result.skipped] || 'Пропущено' });
+  }
+  res.json(result);
+});
+
+adminRouter.post('/frontpad/test', async (req, res) => {
+  res.json(await testConnection());
+});
+
+adminRouter.get('/frontpad/log', async (req, res) => {
+  try {
+    res.json({ configured: frontpadConfigured(), rows: await recentLog(req.query.limit) });
+  } catch (e) {
+    dbError(res, e, 500);
+  }
 });
 
 /* What the kitchen has to make for a set of orders: the items, and the
@@ -823,22 +861,22 @@ adminRouter.put('/settings/orders', async (req, res) => {
   res.json({ ok: true, value });
 });
 
-/* Foundation only — the switch is stored and read, but nothing is sent to
-   FrontPad yet (see src/lib/frontpad.js). Two modes: send each order the
-   moment it is confirmed, or collect the day and send it at one time. */
+/* Orders go to FrontPad when an admin confirms them (see src/lib/frontpad.js).
+   Old keys from the batch-mode draft (mode, batch_time) are dropped here. */
 adminRouter.put('/settings/frontpad', async (req, res) => {
   const { data: current } = await supabase
     .from('app_settings').select('value').eq('key', 'frontpad').maybeSingle();
   const value = { ...SETTING_DEFAULTS.frontpad, ...(current?.value || {}) };
+  delete value.mode;
+  delete value.batch_time;
 
-  if ('enabled' in req.body) value.enabled = !!req.body.enabled;
-  if ('mode' in req.body) {
-    value.mode = req.body.mode === 'batch' ? 'batch' : 'on_confirm';
+  for (const key of ['enabled', 'simulation', 'verbose', 'send_returns']) {
+    if (key in req.body) value[key] = !!req.body[key];
   }
-  if ('batch_time' in req.body) {
-    const time = parseTime(req.body.batch_time);
+  if ('delivery_time' in req.body) {
+    const time = parseTime(req.body.delivery_time);
     if (!time) return res.status(400).json({ error: 'Укажите время в формате ЧЧ:ММ' });
-    value.batch_time = time.text;
+    value.delivery_time = time.text;
   }
 
   const { error } = await supabase.from('app_settings').upsert({
@@ -908,6 +946,7 @@ function pickCompany(b = {}) {
   if ('company_name' in b) out.company_name = b.company_name?.trim() || null;
   if ('company_code' in b) out.company_code = b.company_code?.trim() || null;
   if ('access' in b) out.access = !!b.access;
+  if ('phone' in b) out.phone = String(b.phone ?? '').trim() || null;
   return out;
 }
 
@@ -925,6 +964,9 @@ function itemError(res, error) {
   if (error?.code === '23505' && String(error.message).includes('items_frontpad_id_key')) {
     return res.status(400).json({ error: 'Этот артикул FrontPad уже привязан к другой позиции' });
   }
+  if (error?.code === '23505' && String(error.message).includes('items_frontpad_return_id_key')) {
+    return res.status(400).json({ error: 'Этот артикул возврата FrontPad уже привязан к другой позиции' });
+  }
   return dbError(res, error);
 }
 
@@ -939,6 +981,9 @@ function pickItem(b = {}) {
   // FrontPad article. Free-form string; blank means "not mapped to FrontPad"
   // and is stored as NULL so the unique index ignores it.
   if ('frontpad_id' in b) out.frontpad_id = String(b.frontpad_id ?? '').trim() || null;
+  if ('frontpad_return_id' in b) {
+    out.frontpad_return_id = String(b.frontpad_return_id ?? '').trim() || null;
+  }
   if ('materials' in b) {
     // store a {id, name} snapshot so an item still reads correctly if a
     // material is later renamed or removed

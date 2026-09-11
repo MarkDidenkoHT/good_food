@@ -204,6 +204,9 @@ function draw() {
   wrap.querySelectorAll('[data-decide]').forEach((b) => {
     b.onclick = () => decide(b.dataset.decide, b.dataset.status);
   });
+  wrap.querySelectorAll('[data-fp]').forEach((b) => {
+    b.onclick = () => resendFrontpad(b.dataset.fp);
+  });
   wrap.querySelectorAll('[data-invoice]').forEach((b) => {
     b.onclick = () => printInvoice(b.dataset.invoice);
   });
@@ -234,6 +237,7 @@ function rowHTML(o) {
         ${o.comment ? `<div class="hint" style="margin:4px 0 0">${esc(o.comment)}</div>` : ''}</td>
       <td class="num">${o.total ?? 0} ₽</td>
       <td><span class="pill ${cls}">${esc(label)}</span>
+        ${frontpadNote(o)}
         ${o.edited_at
           // the group post says so too; the table has to agree at a glance
           ? `<div class="hint" style="margin:4px 0 0">изменён ${fmtDate(o.edited_at)}</div>`
@@ -243,6 +247,9 @@ function rowHTML(o) {
         ${o.status === 'new' ? `
           <button class="btn btn--sm btn--primary" data-decide="${o.id}" data-status="confirmed">Принять</button>
           <button class="btn btn--sm" data-decide="${o.id}" data-status="rejected">Отклонить</button>` : ''}
+        ${o.status === 'confirmed' && ['failed', 'simulated', 'none'].includes(o.frontpad_status || 'none')
+          && (o.kind === 'order' || o.frontpad_status !== 'none') ? `
+          <button class="btn btn--sm" data-fp="${o.id}" title="Передать заказ в FrontPad">В FrontPad</button>` : ''}
         <button class="btn btn--ghost btn--icon btn--sm" data-invoice="${o.id}" title="Скачать накладную"><span data-icon="print"></span></button>
       </div></td>
     </tr>`;
@@ -270,11 +277,47 @@ function decide(id, status) {
     `${verb} ${KIND[order?.kind] || 'заказ'} на ${order?.total ?? 0} ₽? ` +
     'Заказчик получит уведомление в Telegram.',
     async () => {
-      await api.post(`/api/admin/orders/${id}/decide`, { status });
-      toast(status === 'confirmed' ? 'Заказ подтверждён' : 'Заказ отклонён');
-      await load();
+      // a FrontPad refusal comes back as an error and keeps the dialog open,
+      // so the admin reads the reason right where they pressed the button
+      const res = await api.post(`/api/admin/orders/${id}/decide`, { status });
+      const fp = res?.frontpad;
+      toast(status === 'rejected' ? 'Заказ отклонён'
+        : fp?.simulated ? 'Заказ подтверждён (FrontPad: симуляция)'
+        : fp?.order_id ? `Заказ подтверждён, FrontPad №${fp.order_number ?? fp.order_id}`
+        : 'Заказ подтверждён');
+      fp?.warnings?.forEach((w) => toast(w, 'err'));
+      await load(true);
     },
     verb
+  );
+}
+
+/* The FrontPad state of an order, next to its status. Nothing when the
+   integration never touched it. */
+function frontpadNote(o) {
+  const s = o.frontpad_status || 'none';
+  if (s === 'none') return '';
+  const text = {
+    sent: `FrontPad №${esc(o.frontpad_order_number || o.frontpad_order_id || '')}`,
+    simulated: 'FrontPad: симуляция',
+    failed: 'FrontPad: ошибка'
+  }[s];
+  const color = s === 'failed' ? 'color:var(--err, #c0392b)' : '';
+  return `<div class="hint" style="margin:4px 0 0;${color}"
+    title="${esc(o.frontpad_error || '')}">${text}</div>`;
+}
+
+function resendFrontpad(id) {
+  confirmDialog(
+    `FrontPad: заказ #${id}`,
+    'Передать этот подтверждённый заказ в FrontPad сейчас?',
+    async () => {
+      const r = await api.post(`/api/admin/orders/${id}/frontpad`, {});
+      toast(r.simulated ? 'Симуляция — записано в журнал' : `Передан, FrontPad №${r.order_number ?? r.order_id}`);
+      r.warnings?.forEach((w) => toast(w, 'err'));
+      await load(true);
+    },
+    'Передать'
   );
 }
 

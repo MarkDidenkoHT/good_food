@@ -333,6 +333,12 @@ function companyForm(company) {
         </div>
         <p class="hint">Сотрудники вводят этот пароль вместе со своим логином при входе.</p>
       </div>
+      <div class="field">
+        <label class="field__label" for="c-phone">Телефон</label>
+        <input class="input" id="c-phone" name="phone" type="tel" value="${esc(company?.phone || '')}"
+               placeholder="необязательно">
+        <p class="hint">Если указан — передаётся в FrontPad вместе с заказом.</p>
+      </div>
       <div class="field" style="margin-bottom:0">
         <label class="switch">
           <span style="font-weight:700">Доступ разрешён</span>
@@ -344,6 +350,7 @@ function companyForm(company) {
       const payload = {
         company_name: d.company_name,
         company_code: (d.company_code || '').trim(),
+        phone: (d.phone || '').trim() || null,
         access: d.access === 'on'
       };
       if (isNew) {
