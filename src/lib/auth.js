@@ -22,6 +22,24 @@ export function cookieOpts(maxAgeMs) {
   };
 }
 
+/* The mini-app session. Thirty days, and it carries `cv` — the generation of
+   the company code it was issued against — so that reissuing the code can
+   invalidate every session of that company at once. See lib/companyCode.js. */
+export function issueUserSession(res, user) {
+  res.cookie(
+    USER_COOKIE,
+    sign({
+      role: 'user',
+      id: user.id,
+      name: user.user_name,
+      company_id: user.company_id,
+      company_role: user.role,
+      cv: user.code_version ?? 1
+    }, '30d'),
+    cookieOpts(30 * 24 * 3600 * 1000)
+  );
+}
+
 export function requireAdmin(req, res, next) {
   const claims = verify(req.cookies?.[ADMIN_COOKIE]);
   if (!claims || claims.role !== 'admin') return res.status(401).json({ error: 'Not authenticated' });

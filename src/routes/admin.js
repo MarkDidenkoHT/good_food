@@ -10,6 +10,7 @@ import { ORDER_DEFAULTS, parseTime } from '../lib/orders.js';
 import { resolveAudience, normaliseAudience, deliver, recall, MAX_TEXT }
   from '../lib/broadcasts.js';
 import { validate as validateReminder } from '../lib/reminders.js';
+import { randomCode, rotateCompanyCode } from '../lib/companyCode.js';
 import express from 'express';
 
 export const adminRouter = Router();
@@ -41,7 +42,8 @@ adminRouter.post('/users', async (req, res) => {
   if (body.role === 'admin' && !body.company_id) {
     return res.status(400).json({ error: 'Администратору нужна компания — её код он вводит при входе' });
   }
-  const { data, error } = await supabase.from('users').insert(body).select().single();
+  const { data, error } = await supabase
+    .from('users').insert(await stampCodeVersion(body)).select().single();
   if (error) return userError(res, error);
   res.status(201).json(data);
 });
@@ -92,7 +94,7 @@ adminRouter.patch('/users/:id', async (req, res) => {
     return res.status(409).json({ error: 'Нельзя снять права у последнего администратора' });
   }
   const { data, error } = await supabase
-    .from('users').update(patch).eq('id', req.params.id).select().single();
+    .from('users').update(await stampCodeVersion(patch)).eq('id', req.params.id).select().single();
   if (error) return userError(res, error);
 
   // a rebind is the one edit here that changes who can sign in as this user,
@@ -300,7 +302,7 @@ adminRouter.get('/companies', async (req, res) => {
 });
 
 adminRouter.post('/companies', async (req, res) => {
-  const body = pickCompany(req.body);
+  const body = pickCompany(req.body, { allowCode: true });
   if (!body.company_name) return res.status(400).json({ error: 'Название обязательно' });
   if (!body.company_code) body.company_code = randomCode(6);
   const { data, error } = await supabase.from('companies').insert(body).select().single();
@@ -314,6 +316,20 @@ adminRouter.patch('/companies/:id', async (req, res) => {
     .from('companies').update(patch).eq('id', req.params.id).select().single();
   if (error) return dbError(res, error);
   res.json(data);
+});
+
+/* Reissue the code: the fast way to shut a company down.
+
+   One write makes every employee stale, and they come back one at a time as
+   the owner passes the new code around. The answer carries the code because
+   the manager who pressed this is who the staff will ring. */
+adminRouter.post('/companies/:id/rotate-code', async (req, res) => {
+  const { company, code, affected, notFound, error } =
+    await rotateCompanyCode(req.params.id, { actorName: req.admin?.name });
+
+  if (notFound) return res.status(404).json({ error: 'Компания не найдена' });
+  if (error) return dbError(res, error);
+  res.json({ ok: true, company_code: code, code_version: company.code_version, affected });
 });
 
 adminRouter.delete('/companies/:id', async (req, res) => {
@@ -810,7 +826,8 @@ const SETTING_DEFAULTS = {
   catalog: { group_by_category: false, show_images: false, image_size: 'md' },
   notifications: { notify_owner: true },
   orders: ORDER_DEFAULTS,
-  frontpad: FRONTPAD_DEFAULTS
+  frontpad: FRONTPAD_DEFAULTS,
+  auth: { allow_owner_reset: false }
 };
 
 adminRouter.get('/settings', async (req, res) => {
@@ -819,6 +836,18 @@ adminRouter.get('/settings', async (req, res) => {
   const out = structuredClone(SETTING_DEFAULTS);
   for (const row of data || []) out[row.key] = { ...out[row.key], ...row.value };
   res.json(out);
+});
+
+/* Whether a company owner may reissue their own code, or must ring a
+   manager to have it done. Off by default: a kill switch for a whole company
+   is something to hand over on purpose, not to find already handed over. */
+adminRouter.put('/settings/auth', async (req, res) => {
+  const value = { allow_owner_reset: !!req.body?.allow_owner_reset };
+  const { error } = await supabase.from('app_settings').upsert({
+    key: 'auth', value, updated_at: new Date().toISOString()
+  });
+  if (error) return dbError(res, error);
+  res.json({ ok: true, value });
 });
 
 adminRouter.put('/settings/notifications', async (req, res) => {
@@ -941,13 +970,29 @@ adminRouter.put('/prefs', async (req, res) => {
 });
 
 /* ---------- helpers ---------- */
-function pickCompany(b = {}) {
+/* `allowCode` is only ever true when creating a company. On an existing one
+   the code is not an editable field: changing it throws the whole company out
+   of the app, which is a deliberate act with its own endpoint and its own
+   confirmation, not something to fall out of a typo in a form. */
+function pickCompany(b = {}, { allowCode = false } = {}) {
   const out = {};
   if ('company_name' in b) out.company_name = b.company_name?.trim() || null;
-  if ('company_code' in b) out.company_code = b.company_code?.trim() || null;
+  if (allowCode && 'company_code' in b) out.company_code = b.company_code?.trim() || null;
   if ('access' in b) out.access = !!b.access;
   if ('phone' in b) out.phone = String(b.phone ?? '').trim() || null;
   return out;
+}
+
+/* A user an admin moves into a company by hand has typed no code, so stamp
+   them with the one the company is on — otherwise the panel would hand
+   somebody a company and lock them out of it in the same click. */
+async function stampCodeVersion(patch) {
+  if (!('company_id' in patch)) return patch;
+  if (patch.company_id === null) return { ...patch, code_version: null };
+
+  const { data } = await supabase
+    .from('companies').select('code_version').eq('id', patch.company_id).maybeSingle();
+  return { ...patch, code_version: data?.code_version ?? 1 };
 }
 
 function pickMaterial(b = {}) {
@@ -1060,10 +1105,3 @@ function pickUser(b = {}) {
   return out;
 }
 
-// no 0/O/1/I — these codes get read off paper and typed on phones
-function randomCode(len = 6) {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let s = '';
-  for (let i = 0; i < len; i++) s += alphabet[Math.floor(Math.random() * alphabet.length)];
-  return s;
-}

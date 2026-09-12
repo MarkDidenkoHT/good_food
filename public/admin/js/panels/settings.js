@@ -12,6 +12,7 @@ import { paintIcons } from '../icons.js';
 let settings = {
   catalog: { group_by_category: false, show_images: false },
   notifications: { notify_owner: true },
+  auth: { allow_owner_reset: false },
   orders: {
     allow_edit_confirmed: false, allow_delete_new: false,
     returns_from_history: false,
@@ -75,6 +76,7 @@ function draw() {
   if (!body) return;
   const grouped = !!settings.catalog?.group_by_category;
   const notifyOwner = settings.notifications?.notify_owner !== false;
+  const ownerReset = !!settings.auth?.allow_owner_reset;
   const images = !!settings.catalog?.show_images;
   const imgSize = settings.catalog?.image_size || 'md';
   const o = settings.orders || {};
@@ -138,6 +140,24 @@ function draw() {
           </div>
           <p class="hint">Владелец компании — сотрудник с ролью «Владелец».
              Если заказ сделал он сам, сообщение придёт один раз.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card__head"><div class="card__title">Пароль компании</div></div>
+      <div class="card__body">
+        <div class="field" style="margin-bottom:0">
+          <span class="field__label">Кто может перевыпустить пароль</span>
+          <div class="seg" id="seg-owner-reset">
+            <button data-v="off" aria-pressed="${!ownerReset}">Только менеджер</button>
+            <button data-v="on"  aria-pressed="${ownerReset}">Менеджер и владелец компании</button>
+          </div>
+          <p class="hint">Перевыпуск сразу отключает от приложения всех
+             сотрудников компании: вернётся только тот, кому передали новый
+             пароль. ${ownerReset
+               ? 'Владелец может сделать это сам из приложения — новый пароль придёт ему и в группу операторов.'
+               : 'Владельцу придётся обратиться к менеджеру.'}</p>
         </div>
       </div>
     </div>
@@ -352,6 +372,19 @@ function draw() {
     b.onclick = () => saveNotify(b.dataset.v === 'both');
   });
 
+  card.querySelectorAll('#seg-owner-reset button').forEach((b) => {
+    b.onclick = () => {
+      const on = b.dataset.v === 'on';
+      if (on && !settings.auth?.allow_owner_reset) {
+        return confirmDialog('Перевыпуск пароля владельцем',
+          'Владелец компании сможет в любой момент отключить от приложения ' +
+          'всех своих сотрудников — без участия менеджера. Разрешить?',
+          () => saveOwnerReset(true), 'Разрешить');
+      }
+      saveOwnerReset(on);
+    };
+  });
+
   card.querySelectorAll('#seg-fp button').forEach((b) => {
     b.onclick = () => saveFrontpad({ enabled: b.dataset.v === 'on' });
   });
@@ -430,6 +463,21 @@ async function save(grouped) {
       toast(e.message, 'err');
       return;
     }
+    toast(e.message, 'err');
+  }
+}
+
+async function saveOwnerReset(allow) {
+  const before = settings.auth;
+  settings.auth = { ...settings.auth, allow_owner_reset: allow };
+  draw();
+  try {
+    const res = await api.put('/api/admin/settings/auth', { allow_owner_reset: allow });
+    settle('auth', res.value);
+    toast('Настройка сохранена');
+  } catch (e) {
+    settings.auth = before;
+    draw();
     toast(e.message, 'err');
   }
 }

@@ -1,17 +1,28 @@
 import { Router } from 'express';
 import { supabase, dbError } from '../lib/supabase.js';
 import { verifyInitData } from '../lib/telegram.js';
-import { sign, cookieOpts, ADMIN_COOKIE, USER_COOKIE, requireAdmin, requireUser } from '../lib/auth.js';
+import { sign, cookieOpts, ADMIN_COOKIE, USER_COOKIE, requireAdmin, requireUser,
+         issueUserSession as issueSession } from '../lib/auth.js';
+import { sendNewUserNotice } from '../lib/notices.js';
 
 export const authRouter = Router();
 
 /* One credential in the whole system: chat_id + the COMPANY code.
 
-   Inside Telegram the mini-app proves identity cryptographically and no code
-   is needed at all. In a plain browser — and for the admin panel, which is
-   not a mini-app — the chat id is typed instead. That is weaker: a chat id is
-   not really a secret, so the company code carries the security. Rotate a
-   company code the moment it leaks. */
+   Inside Telegram the mini-app proves identity cryptographically. In a plain
+   browser — and for the admin panel, which is not a mini-app — the chat id is
+   typed instead. That is weaker: a chat id is not really a secret, so the
+   company code carries the security.
+
+   Registration is code-first. Pressing /start creates nothing anybody has to
+   act on; entering the company code is what attaches the person to a company
+   and puts the request in front of the operators. Approval comes after, so a
+   leaked code still gets nobody in on its own.
+
+   And the code no longer stops mattering once it has been typed. Every user
+   carries the generation of the code they entered (see lib/companyCode.js);
+   reissuing it makes the whole company stale in a single write, and each of
+   them returns only by typing the new one. */
 
 const CODE_RE = /^[A-Za-z0-9_-]{1,32}$/;
 const CHAT_RE = /^-?\d{1,20}$/;
@@ -28,7 +39,8 @@ function identify(body) {
 function loadUser(chatId) {
   return supabase
     .from('users')
-    .select('id, user_name, access, role, chat_id, company_id, companies(id, company_name, access)')
+    .select('id, user_name, access, role, chat_id, tg_username, company_id, code_version, ' +
+            'companies(id, company_name, access, code_version)')
     .eq('chat_id', chatId)
     .maybeSingle();
 }
@@ -36,10 +48,16 @@ function loadUser(chatId) {
 function loadCompany(code) {
   return supabase
     .from('companies')
-    .select('id, company_name, access')
+    .select('id, company_name, access, code_version')
     .ilike('company_code', code)
     .maybeSingle();
 }
+
+/* The company has moved on to a newer code than this user last typed. They
+   keep their place on the roster and their history; they simply cannot order
+   until somebody gives them the current code. */
+const staleCode = (user) =>
+  (user.code_version ?? 0) < (user.companies?.code_version ?? 1);
 
 function publicUser(user, companyName) {
   return {
@@ -98,20 +116,6 @@ authRouter.get('/admin/me', requireAdmin, (req, res) => {
 
 /* ---------- mini-app ---------- */
 
-function issueSession(res, user) {
-  res.cookie(
-    USER_COOKIE,
-    sign({
-      role: 'user',
-      id: user.id,
-      name: user.user_name,
-      company_id: user.company_id,
-      company_role: user.role
-    }, '30d'),
-    cookieOpts(30 * 24 * 3600 * 1000)
-  );
-}
-
 /* Silent sign-in for a user already attached to a company. Reports precisely
    why it failed so the app can show the right screen. */
 authRouter.post('/user/telegram', async (req, res) => {
@@ -121,18 +125,26 @@ authRouter.post('/user/telegram', async (req, res) => {
   const { data: user, error } = await loadUser(chatId);
   if (error) return dbError(res, error, 500);
   if (!user) return res.status(404).json({ error: 'not_registered' });
-  if (user.access === false) return res.status(403).json({ error: 'pending' });
+  /* Ahead of the approval check on purpose: under the new registration a
+     person who has not yet entered a code is not waiting on anybody, they
+     are waiting on themselves, and must be told to type the code. */
   if (!user.company_id) return res.status(409).json({ error: 'no_company' });
+  if (user.access === false) return res.status(403).json({ error: 'pending' });
   if (user.companies?.access === false) return res.status(403).json({ error: 'company_blocked' });
+  if (staleCode(user)) return res.status(409).json({ error: 'code_rotated' });
 
   await touch(user.id);
   issueSession(res, user);
   res.json(publicUser(user));
 });
 
-/* Sign in with the company code, joining the company on first use. The user
-   must already exist (via /start) and be approved, so a leaked company code
-   on its own gets nobody in. */
+/* The company code: joining on first use, and coming back after a rotation.
+
+   The user must already exist — /start is what creates them — but they need
+   not be approved yet, because entering the code is a step of registering
+   rather than a reward for having registered. An unapproved user who gets
+   the code right is attached to the company and announced to the operators;
+   they still leave here without a session. */
 authRouter.post('/user/join', async (req, res) => {
   const chatId = identify(req.body);
   if (chatId === null) return res.status(401).json({ error: 'Введите корректный Chat ID' });
@@ -144,7 +156,6 @@ authRouter.post('/user/join', async (req, res) => {
   const { data: user, error } = await loadUser(chatId);
   if (error) return dbError(res, error, 500);
   if (!user) return res.status(404).json({ error: 'not_registered' });
-  if (user.access === false) return res.status(403).json({ error: 'pending' });
 
   const { data: company, error: cErr } = await loadCompany(code);
   if (cErr) return dbError(res, cErr, 500);
@@ -156,21 +167,39 @@ authRouter.post('/user/join', async (req, res) => {
     return res.status(403).json({ error: 'Этот код принадлежит другой компании' });
   }
 
-  let role = user.role;
-  if (!user.company_id) {
-    // first person into a company owns it; everyone after is staff
-    const { count } = await supabase
-      .from('users').select('id', { count: 'exact', head: true }).eq('company_id', company.id);
-    role = count ? 'employee' : 'owner';
-  }
+  /* Nobody is promoted by being early. Whoever registers first would
+     otherwise own the company — and, where owners may reissue the code, hold
+     its kill switch — on no better evidence than having typed fastest. An
+     admin names the owner in the panel. */
+  const firstJoin = !user.company_id;
+  const role = firstJoin ? 'employee' : user.role;
 
   const { data: updated, error: uErr } = await supabase
     .from('users')
-    .update({ company_id: company.id, role, last_login: new Date().toISOString() })
+    .update({
+      company_id: company.id,
+      role,
+      // whichever generation of the code they just typed, it is the current one
+      code_version: company.code_version ?? 1,
+      last_login: new Date().toISOString()
+    })
     .eq('id', user.id)
-    .select('id, user_name, role, company_id')
+    .select('id, user_name, role, company_id, code_version')
     .single();
   if (uErr) return dbError(res, uErr);
+
+  /* The operators hear about a person once: when they first name a company.
+     Coming back after a rotation is not a new request — they are already on
+     the roster and already approved. */
+  if (firstJoin) {
+    await sendNewUserNotice(
+      { ...updated, chat_id: user.chat_id, tg_username: user.tg_username, access: user.access },
+      company.company_name
+    );
+  }
+
+  // Attached, announced, and still waiting on an operator.
+  if (user.access === false) return res.status(403).json({ error: 'pending' });
 
   issueSession(res, updated);
   res.json(publicUser(updated, company.company_name));
@@ -184,11 +213,15 @@ authRouter.post('/user/logout', (req, res) => {
 authRouter.get('/user/me', requireUser, async (req, res) => {
   const { data, error } = await supabase
     .from('users')
-    .select('id, user_name, access, role, company_id, companies(company_name, access)')
+    .select('id, user_name, access, role, company_id, code_version, ' +
+            'companies(company_name, access, code_version)')
     .eq('id', req.user.id)
     .maybeSingle();
   if (error) return dbError(res, error, 500);
-  if (!data || data.access === false || !data.company_id) {
+  /* A stale code fails the same way as the rest: the app drops back to
+     /user/telegram, which is the one place that says precisely what went
+     wrong and gets the right screen drawn. */
+  if (!data || data.access === false || !data.company_id || staleCode(data)) {
     res.clearCookie(USER_COOKIE, { path: '/' });
     return res.status(401).json({ error: 'Not authenticated' });
   }

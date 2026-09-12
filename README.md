@@ -78,9 +78,61 @@ personal code.
   in a plain browser they enter `chat_id` + the company code.
 
 A company code alone gets nobody in: the user must already exist (via `/start`)
-and have been approved by an admin. The first person to join a company becomes
-its `owner`; everyone after is an `employee`. One owner per company, enforced
-by a partial unique index.
+and be approved by an admin before they get a session. Nobody is promoted for
+being early — every new arrival is an `employee`, and an admin names the owner.
+One owner per company, enforced by a partial unique index.
+
+### Registering is code-first
+
+The code is what ties a person to a company, so it is asked for *before* the
+approval rather than after it:
+
+1. `/start` creates the row and replies asking for the company code. Nothing
+   is posted to the operators' group — pressing Start only says that somebody
+   found the bot, which is not something an operator can act on.
+2. The person enters the code in the mini-app. That attaches them to the
+   company and posts **«Новый пользователь · Компания ACME»** to the group —
+   a request naming its company, which *is* actionable.
+3. An admin opens access. Only then is a session issued.
+
+An unapproved user may therefore enter a code; they still leave without a
+session (`403 pending`). A leaked code buys nothing but a pending row.
+
+### Reissuing the code locks the company down
+
+The code does not stop mattering once it has been typed. Every company carries
+a `code_version`, every user carries the version they last entered, and the two
+must match or the user is **stale** — still on the roster, still approved,
+still holding their history, but unable to order until somebody gives them the
+current code.
+
+Reissuing is therefore one write against one row that stops an entire company
+at once, and each person comes back individually as the code is passed around.
+That asymmetry is the point: blocking is instant and wholesale, restoring is
+deliberate and one at a time. It is the fast answer to "somebody in that
+company should not be ordering any more, and we will sort out who later".
+
+- **Пользователи → Компании → Изменить → Перевыпустить.** The code is
+  otherwise read-only: a mass lockout must not fall out of a typo in a form.
+  The confirmation names how many people it will stop.
+- Everyone affected gets a Telegram message saying access is suspended and to
+  ask their manager — deliberately **without** the new code, which would undo
+  the lockout in the same breath. The new code goes to the operators' group.
+- Sessions are a 30-day JWT, so the check cannot live at sign-in alone:
+  `requireFreshCode` guards every mini-app endpoint, reading the version from
+  a 30-second cache that the rotation itself refreshes.
+- `companies.access = false` remains the blunt version — everybody out, nobody
+  back.
+
+**Настройки → Пароль компании** decides who may press it. By default only a
+manager; switched on (`app_settings.auth.allow_owner_reset`), a company owner
+can also do it from inside the mini-app, in which case the new code goes to
+the owner and to the operators' group. The owner stays signed in — they are
+standing in the app and they are the one who has to hand the code out.
+
+Run [db/migrations/company_code_rotation.sql](db/migrations/company_code_rotation.sql)
+in the Supabase SQL editor. It stamps everyone already inside with their
+company's current version, so applying it evicts nobody.
 
 ## Orders
 
@@ -303,10 +355,15 @@ Apply `db/migrations/008_broadcasts.sql` before deploying this.
 is the webhook.
 
 On `/start` in a private chat the bot looks the sender up by `chat_id`. If they
-are new it inserts a row with **no code, `access = false`, `role = owner`**,
-replies that a manager will be in touch, and posts the name, username, chat_id
-and row id to `TELEGRAM_ADMIN_GROUP_ID`. An admin then opens access and assigns
-a code in the panel. Returning users get their code back once access is open.
+are new it inserts a row with **no company, `access = false`, `role = employee`**
+and replies asking for the company code. Nothing goes to the operators' group
+yet: the group hears about them when they enter the code, because that is the
+first moment there is a company to name (see *Registering is code-first*).
+
+A returning user is told whichever of the three things is true of them — enter
+a code, wait for approval, or go ahead and order — in that order, so somebody
+who has not entered a code yet is never told to sit and wait for a manager who
+has not been told anything about them.
 
 The webhook answers 200 before handling the update, so a slow database never
 triggers a Telegram retry. Missing bot env vars are logged and skipped rather

@@ -326,12 +326,23 @@ function companyForm(company) {
       </div>
       <div class="field">
         <label class="field__label" for="c-code">Пароль компании</label>
-        <div style="display:flex;gap:8px">
-          <input class="input input--code" id="c-code" name="company_code" maxlength="32"
-                 placeholder="AUTO" value="${esc(company?.company_code || '')}">
-          <button type="button" class="btn" id="c-gen">Сгенерировать</button>
-        </div>
-        <p class="hint">Сотрудники вводят этот пароль вместе со своим логином при входе.</p>
+        ${isNew ? `
+          <div style="display:flex;gap:8px">
+            <input class="input input--code" id="c-code" name="company_code" maxlength="32"
+                   placeholder="AUTO" value="">
+            <button type="button" class="btn" id="c-gen">Сгенерировать</button>
+          </div>
+          <p class="hint">Оставьте пустым — сгенерируем сами.</p>
+        ` : `
+          <div style="display:flex;gap:8px">
+            <input class="input input--code" id="c-code" readonly
+                   value="${esc(company.company_code || '')}">
+            <button type="button" class="btn btn--danger" id="c-rotate">Перевыпустить</button>
+          </div>
+          <p class="hint">Пароль меняется только перевыпуском: старый перестаёт
+             действовать сразу, и все сотрудники компании теряют доступ, пока
+             не введут новый.</p>
+        `}
       </div>
       <div class="field">
         <label class="field__label" for="c-phone">Телефон</label>
@@ -349,12 +360,12 @@ function companyForm(company) {
     onSubmit: async (d) => {
       const payload = {
         company_name: d.company_name,
-        company_code: (d.company_code || '').trim(),
         phone: (d.phone || '').trim() || null,
         access: d.access === 'on'
       };
       if (isNew) {
-        if (!payload.company_code) delete payload.company_code;
+        const code = (d.company_code || '').trim();
+        if (code) payload.company_code = code;
         await api.post('/api/admin/companies', payload);
         toast('Компания создана');
       } else {
@@ -365,8 +376,62 @@ function companyForm(company) {
     }
   });
 
-  document.getElementById('c-gen').onclick = async () => {
+  const gen = document.getElementById('c-gen');
+  if (gen) gen.onclick = async () => {
     const { code } = await api.get('/api/admin/new-code');
     document.getElementById('c-code').value = code;
   };
+
+  const rotate = document.getElementById('c-rotate');
+  if (rotate) rotate.onclick = () => rotateCode(company);
 }
+
+/* Reissuing the code shuts the whole company out of the app until somebody
+   passes the new one round. That consequence belongs in the same click as
+   the change — and the count makes it concrete, because "все сотрудники" and
+   "14 человек" land differently on the person about to press it. */
+function rotateCode(company) {
+  const staff = rows.filter((u) => u.company_id === company.id && u.access !== false).length;
+
+  confirmDialog('Перевыпустить пароль',
+    `Пароль компании «${company.company_name}» будет заменён. ` +
+    (staff
+      ? `${staff} ${plural(staff, 'сотрудник', 'сотрудника', 'сотрудников')} ` +
+        'сразу потеряют доступ и вернутся только после того, как введут новый пароль. '
+      : 'Сейчас в компании нет активных сотрудников. ') +
+    'Новый пароль придёт в группу операторов.',
+    async () => {
+      const { company_code } = await api.post(`/api/admin/companies/${company.id}/rotate-code`, {});
+      await load();
+      showNewCode(company, company_code);
+    },
+    'Перевыпустить');
+}
+
+/* The new code, once, big enough to read off a screen over the phone. */
+function showNewCode(company, code) {
+  modal({
+    title: 'Новый пароль компании',
+    submitLabel: 'Готово',
+    bodyHTML: `
+      <p style="margin:0 0 12px">«${esc(company.company_name)}» — передайте пароль тем,
+         кто должен сохранить доступ.</p>
+      <input class="input input--code" id="c-new" readonly value="${esc(code)}"
+             style="font-size:24px;text-align:center;letter-spacing:4px">
+      <p class="hint" style="margin-top:10px">Пароль также отправлен в группу операторов.</p>`,
+    onSubmit: () => {}
+  });
+  const field = document.getElementById('c-new');
+  field?.focus();
+  field?.select();
+  navigator.clipboard?.writeText(code).then(() => toast('Пароль скопирован'), () => {});
+}
+
+const plural = (n, one, few, many) => {
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 14) return many;
+  const mod10 = n % 10;
+  if (mod10 === 1) return one;
+  if (mod10 >= 2 && mod10 <= 4) return few;
+  return many;
+};

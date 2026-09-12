@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { supabase } from '../lib/supabase.js';
 import { sendMessage, esc } from '../lib/telegram.js';
-import { sendNewUserNotice } from '../lib/notices.js';
 
 export const telegramRouter = Router();
 
@@ -67,31 +66,38 @@ async function onStart(msg) {
     return;
   }
 
+  /* The order of these matters: someone who has not entered a code yet is
+     not waiting on a manager, they are waiting on themselves, and telling
+     them to sit tight would strand them. */
   if (existing) {
+    const name = esc(existing.user_name || displayName);
     let text;
-    if (existing.access === false) {
-      text = 'Вы уже зарегистрированы. Доступ пока не открыт — с вами свяжется менеджер.';
-    } else if (!existing.company_id) {
-      text = `С возвращением, ${esc(existing.user_name || displayName)}! ` +
-             'Откройте приложение и введите код компании, выданный менеджером.';
+    if (!existing.company_id) {
+      text = `С возвращением, ${name}! ` +
+             'Чтобы завершить регистрацию, откройте приложение и введите код компании.';
+    } else if (existing.access === false) {
+      text = `С возвращением, ${name}! Заявка на рассмотрении — ` +
+             'вы получите сообщение, когда менеджер откроет доступ.';
     } else {
-      text = `С возвращением, ${esc(existing.user_name || displayName)}! Можно оформлять заказы.`;
+      text = `С возвращением, ${name}! Можно оформлять заказы.`;
     }
     await sendMessage(chatId, text);
     return;
   }
 
-  // New arrival: no code, no access. An admin grants both from the panel.
-  const { data: created, error } = await supabase
+  /* New arrival: a row and nothing else. Pressing /start only says that
+     somebody found the bot, which is not something an operator can act on —
+     the operators' group hears about this person when they enter a company
+     code, because that is the first moment there is a company to name. */
+  const { error } = await supabase
     .from('users')
     .insert({
       user_name: displayName,
       chat_id: chatId,
       tg_username: from.username || null,
       access: false,
-      role: 'owner'
-    })
-    .select().single();
+      role: 'employee'
+    });
 
   if (error) {
     console.error('[telegram] insert failed:', error);
@@ -99,7 +105,9 @@ async function onStart(msg) {
   }
 
   await sendMessage(chatId,
-    'Здравствуйте! Заявка принята. Доступ откроет менеджер — вы получите сообщение, когда всё будет готово.');
-
-  await sendNewUserNotice(created, from.username);
+    `Здравствуйте, ${esc(displayName)}!\n\n` +
+    'Чтобы зарегистрироваться, откройте приложение и введите <b>код компании</b> — ' +
+    'его выдаёт ваш руководитель.\n\n' +
+    'После этого заявку рассмотрит менеджер, и вы получите сообщение, ' +
+    'когда доступ будет открыт.');
 }

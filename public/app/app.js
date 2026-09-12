@@ -52,11 +52,18 @@ async function send(method, url, body) {
     body: JSON.stringify(body || {})
   });
   const data = await res.json().catch(() => ({}));
+  /* The company code was reissued while this app was open. Whatever the user
+     was in the middle of is over: the screen goes back to the door. */
+  if (res.status === 409 && data?.error === 'code_rotated') renderRotated();
   return { ok: res.ok, status: res.status, data };
 }
 
 async function get(url) {
   const res = await fetch(url, { credentials: 'same-origin' });
+  if (res.status === 409) {
+    const data = await res.json().catch(() => ({}));
+    if (data.error === 'code_rotated') { renderRotated(); throw new Error('code_rotated'); }
+  }
   if (!res.ok) throw new Error('load failed');
   return res.json();
 }
@@ -92,9 +99,9 @@ async function start() {
     'Откройте бота и нажмите /start, затем вернитесь сюда.');
   if (data.error === 'company_blocked') return centered('Доступ компании закрыт',
     'Свяжитесь с менеджером.');
-  if (status === 403) return centered('Ожидайте подтверждения',
-    'Менеджер откроет доступ — вы получите сообщение в Telegram.');
-  if (status === 409) return renderJoin();      // known user, no company yet
+  if (data.error === 'code_rotated') return renderRotated();
+  if (data.error === 'no_company') return renderJoin();
+  if (status === 403) return renderPending();
   return renderLogin();
 }
 
@@ -128,12 +135,17 @@ function centered(title, text, extraHTML = '') {
     </div></div>`;
 }
 
-/* Known user inside Telegram who has not joined a company yet. */
-function renderJoin() {
-  centered('Пароль компании', 'Введите пароль, выданный менеджером.', `
+/* The code gate. It is the last step of registering for somebody new, and
+   the way back in for somebody whose company reissued its code — the same
+   form either way, only the words above it change. */
+function renderJoin(
+  title = 'Код компании',
+  text = 'Введите код компании, чтобы завершить регистрацию.'
+) {
+  centered(title, text, `
     <form id="join">
       <input class="code-input" id="code" maxlength="32" autocomplete="one-time-code"
-             autocapitalize="off" spellcheck="false" placeholder="Пароль" required>
+             autocapitalize="off" spellcheck="false" placeholder="Код компании" required>
       <button class="btn" type="submit" style="margin-top:12px">Продолжить</button>
       <div class="err" id="err"></div>
     </form>`);
@@ -143,6 +155,12 @@ function renderJoin() {
     submitJoin(document.getElementById('code').value.trim());
   };
 }
+
+const renderRotated = () => renderJoin('Код компании изменён',
+  'Запросите новый код у руководителя и введите его здесь.');
+
+const renderPending = () => centered('Заявка на рассмотрении',
+  'Менеджер откроет доступ — вы получите сообщение в Telegram.');
 
 async function submitJoin(code) {
   const err = document.getElementById('err');
@@ -155,11 +173,14 @@ async function submitJoin(code) {
   const { ok, status, data } = await post('/api/auth/user/join', payload);
   if (ok) { me = data; return openApp(); }
 
+  /* The code was right — they are now attached to the company and the
+     operators have been told. Nothing more for them to type. */
+  if (data.error === 'pending') return renderPending();
+
   const message =
     status === 404 ? 'Сначала нажмите /start в боте'
-    : data.error === 'pending' ? 'Доступ ещё не открыт менеджером'
     : data.error === 'company_blocked' ? 'Доступ компании закрыт'
-    : data.error || 'Неверный логин или пароль';
+    : data.error || 'Неверный код';
 
   if (err) err.textContent = message;
   else toast(message, 'err');
@@ -203,6 +224,9 @@ function render() {
         <div class="head__row">
           <div class="head__name">${esc(me.company_name || 'Компания')}</div>
           <div class="head__who">${esc(me.user_name || '')}</div>
+          ${catalog.can_reset_code ? `
+          <button class="head__key" id="rotate-code" type="button"
+                  title="Перевыпустить код компании" aria-label="Перевыпустить код компании">🔑</button>` : ''}
         </div>
         <div class="tabs">
           <button class="tab" data-screen="catalog" data-kind="order"
@@ -223,6 +247,9 @@ function render() {
     </div>
     <div class="wrap" id="body"></div>`;
 
+  const rotate = view.querySelector('#rotate-code');
+  if (rotate) rotate.onclick = rotateCode;
+
   view.querySelectorAll('.tab').forEach((b) => {
     b.onclick = () => {
       if (b.dataset.kind) kind = b.dataset.kind;
@@ -237,6 +264,35 @@ function render() {
   if (screen === 'history') return renderHistory();
   renderCatalog();
 }
+
+/* The owner's kill switch, shown only where an operator has allowed it.
+
+   One press stops every one of their employees where they stand — and the
+   new code comes back to the owner alone, because handing access back is
+   meant to be deliberate and one person at a time. The wording says exactly
+   that before anything happens; there is no undoing it afterwards. */
+async function rotateCode() {
+  const warned = await ask(
+    'Перевыпустить код компании?\n\n' +
+    'Все сотрудники сразу потеряют доступ к приложению. ' +
+    'Вернутся только те, кому вы передадите новый код.');
+  if (!warned) return;
+
+  const { ok, data } = await post('/api/app/company/rotate-code', {});
+  if (!ok) return toast(data.error || 'Не удалось перевыпустить код', 'err');
+
+  say(`Новый код компании: ${data.company_code}\n\n` +
+      'Он также отправлен вам в Telegram. Передайте его тем, ' +
+      'кто должен сохранить доступ.');
+}
+
+/* Telegram's own dialogs inside the client, the browser's outside it. */
+const ask = (text) => new Promise((resolve) => {
+  if (tg?.showConfirm) tg.showConfirm(text, (yes) => resolve(Boolean(yes)));
+  else resolve(window.confirm(text));
+});
+
+const say = (text) => (tg?.showAlert ? tg.showAlert(text) : window.alert(text));
 
 /* Each tab shows how much is waiting in its own basket — the clearest way to
    say the two are not one list. */

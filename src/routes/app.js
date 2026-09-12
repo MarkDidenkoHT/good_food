@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { supabase, dbError } from '../lib/supabase.js';
-import { requireUser } from '../lib/auth.js';
+import { requireUser, issueUserSession } from '../lib/auth.js';
+import { requireFreshCode, rotateCompanyCode } from '../lib/companyCode.js';
 import { sendNewOrderNotice, sendOrderEditedNotice, markOrderDeleted } from '../lib/notices.js';
 import { signedUrlMap } from '../lib/storage.js';
 import { orderSettings, editDeadline, canEdit, canDelete, editableStatuses,
@@ -10,18 +11,64 @@ import { orderSettings, editDeadline, canEdit, canDelete, editableStatuses,
 
 export const appRouter = Router();
 appRouter.use(requireUser);
+/* A session outlives a reissued code by up to thirty days unless somebody
+   checks, and the whole point of reissuing one is to reach the people who
+   are using the app right now. */
+appRouter.use(requireFreshCode);
 
 /* Everything the mini-app needs. Materials and costs of materials never
    appear here — customers see items and prices only. */
 
+/* Owners may hold their own kill switch, but only where the operator has
+   said so. Read on every use: withdrawing the permission has to take effect
+   without waiting for anybody to reload anything. */
+async function ownerResetAllowed() {
+  const { data } = await supabase
+    .from('app_settings').select('value').eq('key', 'auth').maybeSingle();
+  return data?.value?.allow_owner_reset === true;
+}
+
+/* Reissue the company code from inside the app.
+
+   The owner is left signed in — they are standing in the app and they have
+   just been handed the code — while everyone else in the company is stopped
+   where they are and told, in Telegram, to ask the owner for it. */
+appRouter.post('/company/rotate-code', async (req, res) => {
+  if (req.user.company_role !== 'owner') {
+    return res.status(403).json({ error: 'Перевыпустить код может только владелец компании' });
+  }
+  if (!await ownerResetAllowed()) {
+    return res.status(403).json({ error: 'Перевыпуск кода отключён — обратитесь к менеджеру' });
+  }
+
+  const { company, code, affected, notFound, error } =
+    await rotateCompanyCode(req.user.company_id, {
+      actorName: req.user.name, keepUserId: req.user.id
+    });
+  if (notFound) return res.status(404).json({ error: 'Компания не найдена' });
+  if (error) return dbError(res, error);
+
+  // their own session was issued against the code they just replaced
+  issueUserSession(res, {
+    id: req.user.id,
+    user_name: req.user.name,
+    company_id: req.user.company_id,
+    role: req.user.company_role,
+    code_version: company.code_version
+  });
+
+  res.json({ ok: true, company_code: code, affected });
+});
+
 appRouter.get('/catalog', async (req, res) => {
-  const [items, categories, settings, orders] = await Promise.all([
+  const [items, categories, settings, orders, ownerReset] = await Promise.all([
     supabase.from('items')
       .select('id, item_name, item_category, item_cost, image_path, available')
       .order('item_name'),
     supabase.from('categories').select('id, category_name, image_path').order('category_name'),
     supabase.from('app_settings').select('key, value').eq('key', 'catalog').maybeSingle(),
-    orderSettings()
+    orderSettings(),
+    ownerResetAllowed()
   ]);
 
   if (items.error) return dbError(res, items.error, 500);
@@ -53,7 +100,10 @@ appRouter.get('/catalog', async (req, res) => {
       image: showImages ? urls[c.image_path] || null : null
     })),
     group_by_category: Boolean(settings.data?.value?.group_by_category),
-    orders: orderRules(orders)
+    orders: orderRules(orders),
+    // draws the owner's «Перевыпустить код» button, and nothing more — the
+    // endpoint checks both halves again for itself
+    can_reset_code: ownerReset && req.user.company_role === 'owner'
   });
 });
 

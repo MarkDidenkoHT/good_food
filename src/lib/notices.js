@@ -4,7 +4,12 @@ import { sendMessage, editMessageText, adminGroupId, esc } from './telegram.js';
 /* The "new user" post in the admin group is a living status line, not a
    one-off alert: every admin action on that user rewrites it in place. The
    group therefore reads as a worklist — anything still saying "Доступ
-   закрыт" needs attention. */
+   закрыт" needs attention.
+
+   It goes up when the person enters their company code, not when they press
+   /start. Pressing /start says only that somebody found the bot; entering
+   the code is the first moment there is a company to name, and a request
+   naming its company is the one an operator can actually act on. */
 
 const panelUrl = (userId) => {
   const base = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
@@ -24,6 +29,7 @@ function noticeText(user, opts = {}) {
   });
   return [
     '<b>Новый пользователь</b>',
+    user.company_name ? `Компания: <b>${esc(user.company_name)}</b>` : null,
     `Имя: ${esc(user.user_name || '—')}`,
     user.tg_username ? `Username: @${esc(user.tg_username)}` : null,
     `chat_id: <code>${user.chat_id}</code>`,
@@ -41,16 +47,16 @@ function markup(user, { deleted = false } = {}) {
 }
 
 /* Posts the notice and remembers its message id so it can be edited later. */
-export async function sendNewUserNotice(user, tgUsername) {
+export async function sendNewUserNotice(user, companyName = null) {
   const group = adminGroupId();
   if (!group) {
     console.warn('[notices] skipped — TELEGRAM_ADMIN_GROUP_ID is not set');
     return;
   }
 
-  const withName = { ...user, tg_username: tgUsername };
-  const res = await sendMessage(group, noticeText(withName), {
-    reply_markup: markup(withName)
+  const full = { ...user, company_name: companyName ?? user.company_name ?? null };
+  const res = await sendMessage(group, noticeText(full), {
+    reply_markup: markup(full)
   });
 
   const messageId = res?.result?.message_id;
@@ -81,6 +87,62 @@ export async function refreshUserNotice(user, opts = {}) {
   });
 }
 
+
+/* ── company code ─────────────────────────────────────────────────────── */
+
+// Telegram tolerates far more than this; the pause is here so a company of a
+// hundred does not arrive as one burst.
+const GAP_MS = 40;
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* Says what a reissued code means to each audience.
+
+   The operators' group gets the new code, because a manager is who people
+   ring when they are locked out. Everyone who was using the old one gets a
+   sentence explaining why the app stopped — and deliberately not the code
+   itself: sending it back automatically would undo the lockout in the same
+   breath as it began. Whoever the code is for, a person passes it on. */
+export async function announceCodeRotated({ company, code, actorName, suspended = [], keeper = null }) {
+  const name = esc(company.company_name || `#${company.id}`);
+
+  const group = adminGroupId();
+  if (group) {
+    await sendMessage(group, [
+      '🔑 <b>Код компании перевыпущен</b>',
+      `Компания: <b>${name}</b>`,
+      `Кто: ${esc(actorName || 'админ')}`,
+      '',
+      `Новый код: <code>${esc(code)}</code>`,
+      '',
+      suspended.length
+        ? `Доступ приостановлен у ${suspended.length} чел. — вернутся, когда введут новый код.`
+        : 'В компании некого было отключать.'
+    ].join('\n'));
+  } else {
+    console.warn('[notices] rotation notice skipped — TELEGRAM_ADMIN_GROUP_ID is not set');
+  }
+
+  /* The owner who pressed the button: still standing in the app, and the one
+     who now has to hand the code out. */
+  if (keeper?.chat_id) {
+    await sendMessage(keeper.chat_id, [
+      '🔑 <b>Код компании перевыпущен</b>',
+      '',
+      `Новый код: <code>${esc(code)}</code>`,
+      '',
+      'Сотрудники отключены от приложения. Передайте код тем, кто должен ' +
+      'сохранить доступ — остальные войти не смогут.'
+    ].join('\n'));
+  }
+
+  for (const user of suspended) {
+    await sendMessage(user.chat_id,
+      '⛔️ <b>Доступ приостановлен</b>\n\n' +
+      'Код компании изменён. Запросите новый код у руководителя ' +
+      'и введите его в приложении.');
+    await pause(GAP_MS);
+  }
+}
 
 /* ── orders ───────────────────────────────────────────────────────────── */
 
