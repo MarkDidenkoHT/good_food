@@ -78,10 +78,10 @@ function toast(text, kindName = 'ok') {
 
 /* ── boot ───────────────────────────────────────────────────── */
 
-/* Inside Telegram the signed initData identifies the user with no typing. In
-   a plain browser there is nothing to verify, so the login form asks for the
-   chat id and the company code instead. */
-let chatId = null;
+/* The signed initData Telegram supplies on launch is the only thing that
+   identifies anybody here. Outside Telegram there is no signature to check
+   and nothing that could stand in for one — a chat id is public, so typing
+   one proves nothing — which is why there is no browser login any more. */
 
 async function start() {
   const initData = tg?.initData || '';
@@ -90,7 +90,7 @@ async function start() {
   const session = await fetch('/api/auth/user/me', { credentials: 'same-origin' });
   if (session.ok) { me = await session.json(); return openApp(); }
 
-  if (!initData) return renderLogin();
+  if (!initData) return renderOutsideTelegram();
 
   const { ok, status, data } = await post('/api/auth/user/telegram', { initData });
   if (ok) { me = data; return openApp(); }
@@ -102,28 +102,14 @@ async function start() {
   if (data.error === 'code_rotated') return renderRotated();
   if (data.error === 'no_company') return renderJoin();
   if (status === 403) return renderPending();
-  return renderLogin();
+  return renderOutsideTelegram();
 }
 
-/* Browser login: chat id + company code. */
-function renderLogin() {
-  centered('Вход', 'Введите логин и пароль, выданные менеджером.', `
-    <form id="login" style="text-align:left">
-      <input id="chat" inputmode="numeric" maxlength="20" autocomplete="off"
-             spellcheck="false" placeholder="Логин" required>
-      <input class="code-input" id="code" maxlength="32" autocomplete="one-time-code"
-             autocapitalize="off" spellcheck="false" placeholder="Пароль" required
-             style="margin-top:10px">
-      <button class="btn" type="submit" style="margin-top:12px">Войти</button>
-      <div class="err" id="err"></div>
-    </form>`);
-
-  document.getElementById('login').onsubmit = (e) => {
-    e.preventDefault();
-    chatId = document.getElementById('chat').value.trim();
-    submitJoin(document.getElementById('code').value.trim());
-  };
-}
+/* Opened anywhere but inside Telegram — or with a launch payload the server
+   would not verify. There is no form to offer: without the signature the app
+   cannot establish who this is, and no amount of typing would change that. */
+const renderOutsideTelegram = () => centered('Откройте через Telegram',
+  'Приложение работает внутри Telegram. Откройте бота и запустите его оттуда.');
 
 function centered(title, text, extraHTML = '') {
   view.innerHTML = `
@@ -166,16 +152,18 @@ async function submitJoin(code) {
   const err = document.getElementById('err');
   if (err) err.textContent = '';
 
-  const payload = { code };
-  if (tg?.initData) payload.initData = tg.initData;
-  if (chatId) payload.chat_id = chatId;
-
-  const { ok, status, data } = await post('/api/auth/user/join', payload);
+  const { ok, status, data } = await post('/api/auth/user/join',
+    { code, initData: tg?.initData || '' });
   if (ok) { me = data; return openApp(); }
 
   /* The code was right — they are now attached to the company and the
      operators have been told. Nothing more for them to type. */
   if (data.error === 'pending') return renderPending();
+
+  /* The launch payload went stale while the form was open — it carries a
+     timestamp the server will not accept for ever. Relaunching is the only
+     way to get a fresh one, so say that instead of blaming the code. */
+  if (data.error === 'need_telegram') return renderOutsideTelegram();
 
   const message =
     status === 404 ? 'Сначала нажмите /start в боте'

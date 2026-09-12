@@ -150,14 +150,14 @@ function draw() {
         <div class="field" style="margin-bottom:0">
           <span class="field__label">Кто может перевыпустить пароль</span>
           <div class="seg" id="seg-owner-reset">
-            <button data-v="off" aria-pressed="${!ownerReset}">Только менеджер</button>
-            <button data-v="on"  aria-pressed="${ownerReset}">Менеджер и владелец компании</button>
+            <button data-v="off" aria-pressed="${!ownerReset}">Только администратор</button>
+            <button data-v="on"  aria-pressed="${ownerReset}">Администратор и владелец компании</button>
           </div>
           <p class="hint">Перевыпуск сразу отключает от приложения всех
              сотрудников компании: вернётся только тот, кому передали новый
              пароль. ${ownerReset
                ? 'Владелец может сделать это сам из приложения — новый пароль придёт ему и в группу операторов.'
-               : 'Владельцу придётся обратиться к менеджеру.'}</p>
+               : 'Владельцу придётся обратиться к администратору.'}</p>
         </div>
       </div>
     </div>

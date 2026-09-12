@@ -116,16 +116,17 @@ company should not be ordering any more, and we will sort out who later".
   otherwise read-only: a mass lockout must not fall out of a typo in a form.
   The confirmation names how many people it will stop.
 - Everyone affected gets a Telegram message saying access is suspended and to
-  ask their manager — deliberately **without** the new code, which would undo
-  the lockout in the same breath. The new code goes to the operators' group.
+  ask whoever runs their company — deliberately **without** the new code, which
+  would undo the lockout in the same breath. The new code goes to the
+  operators' group.
 - Sessions are a 30-day JWT, so the check cannot live at sign-in alone:
   `requireFreshCode` guards every mini-app endpoint, reading the version from
   a 30-second cache that the rotation itself refreshes.
 - `companies.access = false` remains the blunt version — everybody out, nobody
   back.
 
-**Настройки → Пароль компании** decides who may press it. By default only a
-manager; switched on (`app_settings.auth.allow_owner_reset`), a company owner
+**Настройки → Пароль компании** decides who may press it. By default only an
+admin; switched on (`app_settings.auth.allow_owner_reset`), a company owner
 can also do it from inside the mini-app, in which case the new code goes to
 the owner and to the operators' group. The owner stays signed in — they are
 standing in the app and they are the one who has to hand the code out.

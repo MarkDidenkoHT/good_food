@@ -4,15 +4,26 @@ import { verifyInitData } from '../lib/telegram.js';
 import { sign, cookieOpts, ADMIN_COOKIE, USER_COOKIE, requireAdmin, requireUser,
          issueUserSession as issueSession } from '../lib/auth.js';
 import { sendNewUserNotice } from '../lib/notices.js';
+import { CODE_RE } from '../lib/companyCode.js';
 
 export const authRouter = Router();
 
-/* One credential in the whole system: chat_id + the COMPANY code.
+/* Who may sign in, and on what evidence.
 
-   Inside Telegram the mini-app proves identity cryptographically. In a plain
-   browser — and for the admin panel, which is not a mini-app — the chat id is
-   typed instead. That is weaker: a chat id is not really a secret, so the
-   company code carries the security.
+   A chat id is not a secret. The bot prints one on /id in any chat it is in,
+   every new-user notice carries one into the operators' group, and the admin
+   panel has them on screen in a table. So a chat id can say who someone
+   claims to be; it can never be what proves it.
+
+   The mini-app therefore accepts exactly one credential: the launch payload
+   Telegram signs with a key derived from the bot token. verifyInitData checks
+   that signature and its age, and identify() returns a chat id only when it
+   passes. There is no typed-chat-id path here any more — a browser outside
+   Telegram has nothing to present and is told to open the app from the bot.
+
+   The admin panel is not a mini-app and has no initData, so it keeps a typed
+   login — but it is chat id AND the company code, checked together, and
+   /admin/login below is the only place that reads a chat id off the body.
 
    Registration is code-first. Pressing /start creates nothing anybody has to
    act on; entering the company code is what attaches the person to a company
@@ -24,16 +35,14 @@ export const authRouter = Router();
    reissuing it makes the whole company stale in a single write, and each of
    them returns only by typing the new one. */
 
-const CODE_RE = /^[A-Za-z0-9_-]{1,32}$/;
 const CHAT_RE = /^-?\d{1,20}$/;
 
-/* Signed Telegram payload first; a typed chat id is the fallback. */
+/* The signature, or nothing. Returns null when initData is absent, forged,
+   expired — or when TELEGRAM_BOT_TOKEN is unset, because a server that cannot
+   verify a signature must refuse logins rather than wave them through. */
 function identify(body) {
   const tgUser = verifyInitData(body?.initData);
-  if (tgUser) return Number(tgUser.id);
-
-  const typed = String(body?.chat_id ?? '').trim();
-  return CHAT_RE.test(typed) ? Number(typed) : null;
+  return tgUser ? Number(tgUser.id) : null;
 }
 
 function loadUser(chatId) {
@@ -45,12 +54,26 @@ function loadUser(chatId) {
     .maybeSingle();
 }
 
-function loadCompany(code) {
-  return supabase
+/* CODE_RE has already kept ILIKE's wildcards out of `code`, so the pattern is
+   literal and this is a case-insensitive exact match.
+
+   The comparison afterwards says the same thing a second time, against the
+   value that came back. It is redundant today and deliberately so: if the
+   charset is ever widened, a pattern that matched a company other than itself
+   still resolves to no company at all, rather than quietly becoming a key. */
+async function loadCompany(code) {
+  const { data, error } = await supabase
     .from('companies')
-    .select('id, company_name, access, code_version')
+    .select('id, company_name, access, code_version, company_code')
     .ilike('company_code', code)
     .maybeSingle();
+  if (error) return { data: null, error };
+
+  if (!data || String(data.company_code).toLowerCase() !== code.toLowerCase()) {
+    return { data: null, error: null };
+  }
+  const { company_code, ...company } = data;
+  return { data: company, error: null };
 }
 
 /* The company has moved on to a newer code than this user last typed. They
@@ -119,8 +142,11 @@ authRouter.get('/admin/me', requireAdmin, (req, res) => {
 /* Silent sign-in for a user already attached to a company. Reports precisely
    why it failed so the app can show the right screen. */
 authRouter.post('/user/telegram', async (req, res) => {
+  /* No signature, no session. This used to fall back to a typed chat id,
+     which made a public identifier sufficient on its own to be handed a
+     thirty-day session as anybody on the roster. */
   const chatId = identify(req.body);
-  if (chatId === null) return res.status(401).json({ error: 'need_code' });
+  if (chatId === null) return res.status(401).json({ error: 'need_telegram' });
 
   const { data: user, error } = await loadUser(chatId);
   if (error) return dbError(res, error, 500);
@@ -146,8 +172,11 @@ authRouter.post('/user/telegram', async (req, res) => {
    the code right is attached to the company and announced to the operators;
    they still leave here without a session. */
 authRouter.post('/user/join', async (req, res) => {
+  /* Both halves or neither: the signature says who, the code says which
+     company, and this endpoint issues a session only when it has checked
+     the two of them together. */
   const chatId = identify(req.body);
-  if (chatId === null) return res.status(401).json({ error: 'Введите корректный Chat ID' });
+  if (chatId === null) return res.status(401).json({ error: 'need_telegram' });
 
   const code = String(req.body?.code || '').trim();
   if (!code) return res.status(400).json({ error: 'Введите код компании' });

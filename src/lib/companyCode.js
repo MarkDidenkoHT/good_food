@@ -23,6 +23,22 @@ export function randomCode(len = 6) {
   return s;
 }
 
+/* What a company code may be made of, and the one place that says so.
+
+   A code is matched case-insensitively, with ILIKE — and in ILIKE `_` is the
+   single-character wildcard and `%` the multi-character one. A code of six
+   underscores would otherwise match every six-character code in the table,
+   which turns the credential into a skeleton key and the login into an oracle
+   for reading the real codes back one character at a time.
+
+   Escaping the pattern would work; keeping the wildcards out of the alphabet
+   is better, because then there is nothing left in a valid code for ILIKE to
+   interpret and no escaping to get wrong later. randomCode has never produced
+   one of these — this is about codes an admin types in by hand. */
+export const CODE_RE = /^[A-Za-z0-9-]{1,32}$/;
+
+export const isValidCode = (code) => CODE_RE.test(String(code ?? '').trim());
+
 /* Every mini-app request checks the version, so it cannot be a query every
    time. Companies are few and change rarely; a short TTL keeps a second
    instance no more than that far behind, and the rotation itself refreshes

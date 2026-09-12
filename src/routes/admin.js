@@ -10,7 +10,7 @@ import { ORDER_DEFAULTS, parseTime } from '../lib/orders.js';
 import { resolveAudience, normaliseAudience, deliver, recall, MAX_TEXT }
   from '../lib/broadcasts.js';
 import { validate as validateReminder } from '../lib/reminders.js';
-import { randomCode, rotateCompanyCode } from '../lib/companyCode.js';
+import { randomCode, rotateCompanyCode, isValidCode } from '../lib/companyCode.js';
 import express from 'express';
 
 export const adminRouter = Router();
@@ -304,6 +304,12 @@ adminRouter.get('/companies', async (req, res) => {
 adminRouter.post('/companies', async (req, res) => {
   const body = pickCompany(req.body, { allowCode: true });
   if (!body.company_name) return res.status(400).json({ error: 'Название обязательно' });
+  /* A hand-typed code has to sit in the same alphabet the login accepts, or
+     it is a code nobody can ever enter — and the characters left out are the
+     ones that would make it match more than itself. See lib/companyCode.js. */
+  if (body.company_code && !isValidCode(body.company_code)) {
+    return res.status(400).json({ error: 'Код: латиница, цифры и дефис, до 32 символов' });
+  }
   if (!body.company_code) body.company_code = randomCode(6);
   const { data, error } = await supabase.from('companies').insert(body).select().single();
   if (error) return dbError(res, error);
