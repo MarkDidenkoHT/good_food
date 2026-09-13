@@ -1,5 +1,11 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
+/* Quick taps on + must not double-tap zoom the page (iOS). */
+button { touch-action: manipulation; }
+
+/* Hover styles below sit inside @media (hover: hover): iOS keeps :hover
+   applied after a tap, so a tapped button would stay highlighted. */
+
 body {
   margin: 0;
   font-family: var(--font);
@@ -40,10 +46,10 @@ input:focus, textarea:focus {
   background: var(--brand); color: #fff; font-weight: 800; font-size: 15px;
   cursor: pointer; font-family: inherit;
 }
-.btn:hover { background: var(--brand-hover); }
+@media (hover: hover) { .btn:hover { background: var(--brand-hover); } }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn--ghost { background: var(--surface-2); color: var(--ink-2); }
-.btn--ghost:hover { background: var(--line); }
+@media (hover: hover) { .btn--ghost:hover { background: var(--line); } }
 .err { color: var(--danger); font-size: 13px; margin-top: 10px; min-height: 18px; }
 
 /* ── header ──────────────────────────────────────────────────── */
@@ -61,7 +67,8 @@ input:focus, textarea:focus {
   font-size: 15px; line-height: 1; opacity: .55;
   transition: opacity var(--speed);
 }
-.head__key:hover, .head__key:focus-visible { opacity: 1; }
+.head__key:focus-visible { opacity: 1; }
+@media (hover: hover) { .head__key:hover { opacity: 1; } }
 
 .tabs { display: flex; gap: 2px; }
 .tab {
@@ -71,7 +78,7 @@ input:focus, textarea:focus {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   transition: color var(--speed), border-color var(--speed);
 }
-.tab:hover { color: var(--ink-2); }
+@media (hover: hover) { .tab:hover { color: var(--ink-2); } }
 .tab[aria-selected="true"] { color: var(--brand); border-bottom-color: var(--brand); }
 /* locked while an already-sent order of the other kind is being edited */
 .tab:disabled { opacity: .4; cursor: not-allowed; }
@@ -130,11 +137,11 @@ input:focus, textarea:focus {
   cursor: pointer; display: grid; place-items: center; line-height: 1; font-family: inherit;
   transition: border-color var(--speed), color var(--speed), background var(--speed);
 }
-.stepper button:hover { border-color: var(--brand); color: var(--brand); }
+@media (hover: hover) { .stepper button:hover { border-color: var(--brand); color: var(--brand); } }
 .stepper__qty { min-width: 26px; text-align: center; font-weight: 800; }
 .stepper--empty .stepper__qty, .stepper--empty .stepper__minus { visibility: hidden; }
 .stepper__plus { border-color: var(--brand); color: var(--brand); }
-.stepper__plus:hover { background: var(--brand); color: #fff; }
+@media (hover: hover) { .stepper__plus:hover { background: var(--brand); color: #fff; } }
 
 /* ── cart bar ────────────────────────────────────────────────── */
 .cart {
@@ -144,7 +151,8 @@ input:focus, textarea:focus {
   box-shadow: var(--shadow-lg);
 }
 /* Tall carts scroll rather than swallow the catalog. */
-.cart__list { max-height: 38vh; overflow-y: auto; margin-bottom: 10px; }
+/* contain: reaching the end of the cart list must not scroll the page (iOS). */
+.cart__list { max-height: 38vh; overflow-y: auto; overscroll-behavior: contain; margin-bottom: 10px; }
 .cart__group + .cart__group { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
 
 .cart__ghead { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
@@ -159,7 +167,7 @@ input:focus, textarea:focus {
   background: var(--surface-2); color: var(--ink-3); font-size: 15px; line-height: 1;
   cursor: pointer; font-family: inherit; display: grid; place-items: center;
 }
-.cart__clear:hover { background: var(--brand-soft); color: var(--brand); }
+@media (hover: hover) { .cart__clear:hover { background: var(--brand-soft); color: var(--brand); } }
 
 .cart__line {
   display: flex; align-items: baseline; gap: 8px;

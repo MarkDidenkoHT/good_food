@@ -7,6 +7,8 @@ import { hideSplash, showLoader, loaderHTML } from '/loader.js';
 const tg = window.Telegram?.WebApp;
 tg?.ready();
 tg?.expand();
+/* On iOS, dragging down while scrolling the catalog would minimise the app. */
+if (tg?.isVersionAtLeast?.('7.7')) tg.disableVerticalSwipes();
 
 /* Follow the theme of the Telegram client the app is embedded in. */
 function syncTheme() {
@@ -462,7 +464,7 @@ function repeatOrder(order) {
 }
 
 async function deleteOrder(order) {
-  if (!confirm(`Отменить ${order.kind === 'return' ? 'возврат' : 'заказ'} #${order.id}?`)) return;
+  if (!await ask(`Отменить ${order.kind === 'return' ? 'возврат' : 'заказ'} #${order.id}?`)) return;
   const { ok, data } = await send('DELETE', `/api/app/orders/${order.id}`);
   if (!ok) return toast(data.error || 'Не удалось отменить', 'err');
   toast('Заказ отменён');
