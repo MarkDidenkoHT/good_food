@@ -78,9 +78,12 @@ export function validate(body = {}, { partial = false } = {}) {
     value.time_of_day = time.text;
   }
 
+  // a kitchen reminder posts the prep list, so it has no text of its own
+  const kitchen = body.audience?.mode === 'kitchen';
+
   if (!partial || 'text' in body) {
     const text = String(body.text || '').trim();
-    if (!text) return { error: 'Введите текст уведомления' };
+    if (!text && !kitchen) return { error: 'Введите текст уведомления' };
     if (text.length > MAX_TEXT) return { error: `Не больше ${MAX_TEXT} символов` };
     value.text = text;
   }
@@ -97,7 +100,7 @@ export function validate(body = {}, { partial = false } = {}) {
 /* The broadcasts helper reads the audience off the request body itself; a
    reminder keeps it nested under `audience`, so unwrap it first. */
 export function normaliseAudience(a = {}) {
-  const mode = ['companies', 'users'].includes(a?.mode) ? a.mode : 'all';
+  const mode = ['companies', 'users', 'kitchen'].includes(a?.mode) ? a.mode : 'all';
   return {
     mode,
     company_ids: mode === 'companies'

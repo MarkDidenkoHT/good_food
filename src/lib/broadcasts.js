@@ -29,6 +29,10 @@ const pause = (ms) => new Promise((r) => setTimeout(r, ms));
    still have access: a blocked account is not a silent failure to explain
    later, it is simply not a recipient. */
 export async function resolveAudience(audience = {}) {
+  // the kitchen group is not people: anything that would message users gets
+  // nobody, rather than falling through to "all"
+  if (audience.mode === 'kitchen') return [];
+
   let query = supabase
     .from('users')
     .select('id, user_name, chat_id, company_id')

@@ -115,6 +115,7 @@ function daysText(days = []) {
 }
 
 function audienceText(a = {}) {
+  if (a.mode === 'kitchen') return 'группе кухни';
   if (a.mode === 'companies') {
     const names = (a.company_ids || [])
       .map((id) => companies.find((c) => c.id === id)?.company_name)
@@ -288,10 +289,10 @@ function rowHTML(r) {
       <td style="font-weight:700">${esc(r.name)}</td>
       <td>${esc(daysText(r.days))}</td>
       <td class="num">${esc(r.time_of_day || '—')}</td>
-      <td style="color:var(--ink-2)">${esc(preview(r.text))}</td>
+      <td style="color:var(--ink-2)">${esc(isKitchen(r) ? 'Список на приготовление' : preview(r.text))}</td>
       <td>
         <span class="pill">${esc(audienceText(r.audience))}</span>
-        <div class="hint" style="margin:4px 0 0">${count} чел.</div>
+        <div class="hint" style="margin:4px 0 0">${isKitchen(r) ? 'заказы на сегодня' : `${count} чел.`}</div>
       </td>
       <td>${r.enabled
         ? '<span class="pill pill--on">Включено</span>'
@@ -329,7 +330,21 @@ async function toggle(r) {
 
 /* Sending by hand is the only way to see what users will get without waiting
    for the schedule, so it is worth a confirmation with the count in it. */
+const isKitchen = (r) => r?.audience?.mode === 'kitchen';
+
 function sendNow(r) {
+  if (isKitchen(r)) {
+    confirmDialog('Отправить сейчас',
+      `Отправить в группу кухни список на приготовление по сегодняшним подтверждённым заказам? ` +
+      'На расписание это не влияет.',
+      async () => {
+        const res = await api.post(`/api/admin/reminders/${r.id}/test`);
+        toast(`Отправлено на кухню — заказов: ${res.orders}`);
+      },
+      'Отправить');
+    return;
+  }
+
   const count = audienceCount(r.audience);
   confirmDialog('Отправить сейчас',
     `Отправить «${r.name}» прямо сейчас? Получат ${count} чел. ` +
@@ -391,7 +406,7 @@ function openForm(reminder) {
            поэтому сообщение уйдёт в течение ${TICK_MIN} минут после указанного времени.</p>
       </div>
 
-      <div class="field">
+      <div class="field" id="rf-text-field">
         <label class="field__label" for="rf-text">Текст сообщения</label>
         <textarea class="input" id="rf-text" name="text" rows="4" required
                   maxlength="${MAX_TEXT}"
@@ -406,6 +421,7 @@ function openForm(reminder) {
           <button type="button" data-v="all"       aria-pressed="${draft.mode === 'all'}">Всем</button>
           <button type="button" data-v="companies" aria-pressed="${draft.mode === 'companies'}">Компаниям</button>
           <button type="button" data-v="users"     aria-pressed="${draft.mode === 'users'}">Отдельным людям</button>
+          <button type="button" data-v="kitchen"   aria-pressed="${draft.mode === 'kitchen'}">Кухне</button>
         </div>
         <p class="hint" id="rf-count-people">—</p>
       </div>
@@ -432,7 +448,7 @@ function openForm(reminder) {
         name: data.name,
         days: [...draft.days].sort((x, y) => x - y),
         time_of_day: data.time_of_day,
-        text: data.text,
+        text: draft.mode === 'kitchen' ? '' : data.text,
         enabled: data.enabled === 'on',
         audience: {
           mode: draft.mode,
@@ -488,8 +504,21 @@ function wireForm(draft) {
   text.oninput = paintCount;
   paintCount();
 
+  // a kitchen reminder sends the prep list, not a text
+  const textField = box.querySelector('#rf-text-field');
+  const paintText = () => {
+    const kitchen = draft.mode === 'kitchen';
+    textField.style.display = kitchen ? 'none' : '';
+    text.required = !kitchen;
+  };
+
   const people = box.querySelector('#rf-count-people');
   const paintPeople = () => {
+    if (draft.mode === 'kitchen') {
+      people.textContent = 'В группу кухни уйдёт список на приготовление '
+        + 'по подтверждённым заказам на сегодня. Если заказов нет, ничего не отправится.';
+      return;
+    }
     const n = audienceCount({
       mode: draft.mode, company_ids: draft.company_ids, user_ids: draft.user_ids
     });
@@ -499,7 +528,7 @@ function wireForm(draft) {
 
   const slot = box.querySelector('#rf-picker');
   const drawPicker = () => {
-    if (draft.mode === 'all') { slot.innerHTML = ''; paintPeople(); return; }
+    if (draft.mode === 'all' || draft.mode === 'kitchen') { slot.innerHTML = ''; paintPeople(); return; }
 
     const isCompanies = draft.mode === 'companies';
     const options = isCompanies
@@ -561,9 +590,11 @@ function wireForm(draft) {
       box.querySelectorAll('#rf-mode button').forEach((x) => {
         x.setAttribute('aria-pressed', x.dataset.v === draft.mode);
       });
+      paintText();
       drawPicker();
     };
   });
 
+  paintText();
   drawPicker();
 }
