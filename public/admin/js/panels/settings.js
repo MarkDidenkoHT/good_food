@@ -259,11 +259,11 @@ function draw() {
           <div class="alert__title">Режим симуляции</div>
           <p>Заказ собирается полностью (артикулы, дата, телефон) и пишется в
              журнал ниже, но <b>в FrontPad ничего не уходит</b>. Когда в журнале
-             всё сходится — переключите на «Боевой».</p>
+             всё сходится — переключите на Активный.</p>
         </div>` : ''}
         ${fpOn && !fpSim ? `
         <div class="alert alert--err" style="margin:0 0 16px">
-          <div class="alert__title">Боевой режим</div>
+          <div class="alert__title">Активный режим</div>
           <p>Каждый подтверждённый заказ создаётся в FrontPad. Если FrontPad
              откажет — заказ не подтвердится, и вы увидите причину.</p>
         </div>` : ''}
@@ -283,7 +283,7 @@ function draw() {
           <span class="field__label">Режим</span>
           <div class="seg" id="seg-fp-sim">
             <button data-v="on"  aria-pressed="${fpSim}">Симуляция</button>
-            <button data-v="off" aria-pressed="${!fpSim}">Боевой</button>
+            <button data-v="off" aria-pressed="${!fpSim}">Активный</button>
           </div>
         </div>
 
@@ -392,7 +392,7 @@ function draw() {
     b.onclick = () => {
       const sim = b.dataset.v === 'on';
       if (!sim && settings.frontpad?.simulation !== false) {
-        return confirmDialog('Боевой режим FrontPad',
+        return confirmDialog('Активный режим FrontPad',
           'С этого момента каждый подтверждённый заказ будет создаваться в FrontPad по-настоящему. Включить?',
           () => saveFrontpad({ simulation: false }), 'Включить');
       }
