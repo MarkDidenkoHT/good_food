@@ -497,6 +497,11 @@ adminRouter.get('/frontpad/log', async (req, res) => {
   }
 });
 
+/* A material is counted in pieces or weighed in kg; see materials.unit. */
+const UNIT_LABEL = { pcs: 'шт.', kg: 'кг' };
+const roundQty = (n) => Math.round(n * 1000) / 1000;
+const fmtQty = (n) => (Number(n) || 0).toLocaleString('ru-RU', { maximumFractionDigits: 3 });
+
 /* What the kitchen has to make for a set of orders: the items, and the
    materials those items consume. Returns are excluded — nothing is prepared
    for goods coming back. Materials live only here and in the panel; the
@@ -523,11 +528,11 @@ async function summarise(ids) {
   if (cErr) throw cErr;
 
   const byId = new Map((catalog || []).map((i) => [i.id, i]));
-  const { data: allMaterials } = await supabase.from('materials').select('id, material_name, cost');
+  const { data: allMaterials } = await supabase.from('materials').select('id, material_name, cost, unit');
   const matById = new Map((allMaterials || []).map((m) => [m.id, m]));
 
   const items = [];
-  const materials = new Map();   // material id -> { name, qty, cost }
+  const materials = new Map();   // material id -> { name, qty, cost, unit }
 
   for (const [id, qty] of itemQty) {
     const item = byId.get(id);
@@ -537,14 +542,17 @@ async function summarise(ids) {
       const meta = matById.get(Number(m.id));
       const need = (Number(m.qty) || 1) * qty;
       const cur = materials.get(m.id) ||
-        { id: m.id, name: meta?.material_name || m.name || `#${m.id}`, qty: 0, cost: meta?.cost ?? 0 };
+        { id: m.id, name: meta?.material_name || m.name || `#${m.id}`, qty: 0,
+          cost: meta?.cost ?? 0, unit: meta?.unit === 'kg' ? 'kg' : 'pcs' };
       cur.qty += need;
       materials.set(m.id, cur);
     }
   }
 
+  // weights add up in float, so both the amount and the money are settled
+  // here, once, rather than in every place that prints them
   const list = [...materials.values()]
-    .map((m) => ({ ...m, total: m.qty * (m.cost || 0) }))
+    .map((m) => ({ ...m, qty: roundQty(m.qty), total: Math.round(m.qty * (m.cost || 0)) }))
     .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
 
   return {
@@ -581,7 +589,7 @@ function kitchenText(summary) {
     ...summary.items.map((i) => `• ${tgEsc(i.name)} — ${i.qty} шт.`),
     '',
     '<b>Сырьё</b>',
-    ...summary.materials.map((m) => `• ${tgEsc(m.name)} — ${m.qty} шт.`),
+    ...summary.materials.map((m) => `• ${tgEsc(m.name)} — ${fmtQty(m.qty)} ${UNIT_LABEL[m.unit] || 'шт.'}`),
     '',
     `Себестоимость сырья: <b>${summary.materials_total} ₽</b>`,
     `<i>отправлено ${when}</i>`
@@ -1116,6 +1124,7 @@ function pickMaterial(b = {}) {
   const out = {};
   if ('material_name' in b) out.material_name = b.material_name?.trim() || null;
   if ('cost' in b) out.cost = toMoney(b.cost);
+  if ('unit' in b) out.unit = b.unit === 'kg' ? 'kg' : 'pcs';
   return out;
 }
 
@@ -1186,8 +1195,10 @@ function userError(res, error) {
 
 // how many of a material go into one item; rows written before quantities
 // existed have no qty, and those count as 1
+// A material quantity: pieces, or kg for a weighed material — so up to
+// three decimals (one gram) survive.
 function toQty(v) {
-  const n = Math.round(Number(v));
+  const n = roundQty(Number(v));
   return Number.isFinite(n) && n > 0 ? n : 1;
 }
 

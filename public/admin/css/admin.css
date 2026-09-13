@@ -474,3 +474,6 @@ input[type="date"].input--sm { min-width: 140px; }
 .share { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .share__bar { width: 60px; height: 6px; border-radius: var(--r-pill); background: var(--surface-2); overflow: hidden; }
 .share__bar span { display: block; height: 100%; background: var(--brand); }
+
+/* the unit after a material quantity box — шт or кг */
+.picker__unit { width: 18px; flex: 0 0 auto; color: var(--ink-3); font-size: 12px; }
