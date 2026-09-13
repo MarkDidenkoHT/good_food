@@ -6,7 +6,7 @@ import { pushOrder, FRONTPAD_DEFAULTS, frontpadConfigured, testConnection, recen
   from '../lib/frontpad.js';
 import { sendMessage, notifyAdmins, kitchenGroupId, botConfigured, esc as tgEsc } from '../lib/telegram.js';
 import { uploadImage, removeImage, signedUrl, MAX_BYTES, extFor } from '../lib/storage.js';
-import { ORDER_DEFAULTS, parseTime } from '../lib/orders.js';
+import { ORDER_DEFAULTS, parseTime, localDate } from '../lib/orders.js';
 import { resolveAudience, normaliseAudience, deliver, recall, MAX_TEXT }
   from '../lib/broadcasts.js';
 import { validate as validateReminder } from '../lib/reminders.js';
@@ -525,11 +525,20 @@ adminRouter.post('/orders/send-kitchen', async (req, res) => {
     return res.status(400).json({ error: 'В выборке нет заказов на приготовление' });
   }
 
+  const sent = await sendMessage(group, kitchenText(summary));
+  if (!sent?.ok) return res.status(502).json({ error: 'Telegram не принял сообщение' });
+  res.json({ ok: true, ...summary });
+});
+
+/* The prep list as the kitchen group reads it — the button above and a
+   kitchen notification sent by hand. supabase/functions/cron-tick builds the
+   same text for the scheduled send; keep the two in step. */
+function kitchenText(summary) {
   const when = new Date().toLocaleString('ru-RU', {
     timeZone: 'Europe/Chisinau', dateStyle: 'short', timeStyle: 'short'
   });
 
-  const text = [
+  return [
     '<b>Список на приготовление</b>',
     `Заказов: ${summary.order_count}`,
     '',
@@ -542,11 +551,7 @@ adminRouter.post('/orders/send-kitchen', async (req, res) => {
     `Себестоимость сырья: <b>${summary.materials_total} ₽</b>`,
     `<i>отправлено ${when}</i>`
   ].join('\n');
-
-  const sent = await sendMessage(group, text);
-  if (!sent?.ok) return res.status(502).json({ error: 'Telegram не принял сообщение' });
-  res.json({ ok: true, ...summary });
-});
+}
 
 /* ---------- images ---------- */
 
@@ -717,7 +722,7 @@ adminRouter.delete('/broadcasts/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-/* ---------- reminders (Напоминания) ---------- */
+/* ---------- reminders (Уведомления) ---------- */
 
 /* Recurring messages on a weekly timetable. The panel shows the schedule in
    the admin's own words — days, a time, who — and nothing here or on screen
@@ -750,7 +755,7 @@ adminRouter.patch('/reminders/:id', async (req, res) => {
     .update({ ...value, updated_at: new Date().toISOString() })
     .eq('id', req.params.id).select().maybeSingle();
   if (error) return dbError(res, error);
-  if (!data) return res.status(404).json({ error: 'Напоминание не найдено' });
+  if (!data) return res.status(404).json({ error: 'Уведомление не найдено' });
   res.json(data);
 });
 
@@ -783,7 +788,30 @@ adminRouter.post('/reminders/:id/test', async (req, res) => {
 
   const { data: reminder } = await supabase
     .from('reminders').select('*').eq('id', req.params.id).maybeSingle();
-  if (!reminder) return res.status(404).json({ error: 'Напоминание не найдено' });
+  if (!reminder) return res.status(404).json({ error: 'Уведомление не найдено' });
+
+  // Kitchen: today's confirmed orders, as the 20:00 send would pick them.
+  if (reminder.audience?.mode === 'kitchen') {
+    const group = kitchenGroupId();
+    if (!group) return res.status(400).json({ error: 'TELEGRAM_KITCHEN_GROUP_ID не задан' });
+
+    const { data: today, error: oErr } = await supabase
+      .from('orders').select('id')
+      .eq('status', 'confirmed').eq('kind', 'order')
+      .eq('service_date', localDate(new Date()));
+    if (oErr) return dbError(res, oErr, 500);
+    if (!today?.length) return res.status(400).json({ error: 'Сегодня нет подтверждённых заказов' });
+
+    let summary;
+    try {
+      summary = await summarise(today.map((o) => o.id));
+    } catch (e) {
+      return dbError(res, e, 500);
+    }
+    const sent = await sendMessage(group, kitchenText(summary));
+    if (!sent?.ok) return res.status(502).json({ error: 'Telegram не принял сообщение' });
+    return res.status(201).json({ ok: true, kitchen: true, orders: summary.order_count });
+  }
 
   let recipients;
   try {
@@ -797,7 +825,7 @@ adminRouter.post('/reminders/:id/test', async (req, res) => {
 
   const { data: broadcast, error } = await supabase.from('broadcasts').insert({
     sent_by: req.admin.id,
-    sent_by_name: `Напоминание (вручную): ${reminder.name}`,
+    sent_by_name: `Уведомление (вручную): ${reminder.name}`,
     text: reminder.text,
     audience: reminder.audience || {},
     reminder_id: reminder.id,

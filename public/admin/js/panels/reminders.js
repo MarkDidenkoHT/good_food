@@ -2,11 +2,11 @@ import { api } from '../api.js';
 import { h, esc, toast, modal, confirmDialog, fmtDate } from '../ui.js';
 import { paintIcons } from '../icons.js';
 
-/* Напоминания: messages the bot sends again and again on a weekly timetable.
+/* Уведомления: messages the bot sends again and again on a weekly timetable.
 
    The people who use this panel do not know the word cron and should never
    need to. A reminder is a sentence they can read back — «Ежедневное
-   напоминание о заказе, пн–пт в 16:00, всем» — so the row says exactly that,
+   уведомление о заказе, пн–пт в 16:00, всем» — so the row says exactly that,
    and the form asks for nothing else: a name, the days, a time, the text, who
    gets it, and a switch.
 
@@ -47,9 +47,9 @@ let root;
 
 export const remindersPanel = {
   id: 'reminders',
-  label: 'Напоминания',
+  label: 'Уведомления',
   icon: 'cron',
-  title: 'Напоминания',
+  title: 'Уведомления',
   subtitle: 'Сообщения по расписанию',
 
   actions: () => [
@@ -131,6 +131,7 @@ function audienceText(a = {}) {
     }
     return `${n} чел.`;
   }
+  if (a.mode === 'kitchen') return 'группе кухни';
   return 'всем';
 }
 
@@ -160,8 +161,8 @@ function draw() {
   if (!rows.length) {
     wrap.innerHTML = `
       <div class="card__body" style="color:var(--ink-3)">
-        <p style="margin:0 0 6px">Напоминаний пока нет.</p>
-        <p class="hint" style="margin:0">Напоминание — это сообщение, которое бот отправляет
+        <p style="margin:0 0 6px">Уведомлений пока нет.</p>
+        <p class="hint" style="margin:0">Уведомление — это сообщение, которое бот отправляет
            сам, в выбранные дни и время. Например: «Не забудьте оформить заказ»
            по будням в 16:00.</p>
       </div>`;
@@ -196,11 +197,11 @@ function draw() {
   wrap.querySelectorAll('[data-del]').forEach((b) => {
     b.onclick = () => {
       const r = rows.find((x) => x.id == b.dataset.del);
-      confirmDialog('Удалить напоминание',
+      confirmDialog('Удалить уведомление',
         `Удалить «${r.name}»? Оно перестанет отправляться. Действие необратимо.`,
         async () => {
           await api.del(`/api/admin/reminders/${r.id}`);
-          toast('Напоминание удалено');
+          toast('Уведомление удалено');
           await load(true);
         });
     };
@@ -212,7 +213,7 @@ function draw() {
 function drawTabs() {
   const bar = root?.querySelector('#rem-tabs');
   if (!bar) return;
-  const defs = [['list', `Напоминания (${rows.length})`],
+  const defs = [['list', `Уведомления (${rows.length})`],
                 ['history', `История (${runs.length})`]];
   bar.innerHTML = '';
   defs.forEach(([id, label]) => {
@@ -233,7 +234,7 @@ function drawHistory(wrap) {
     wrap.innerHTML = `
       <div class="card__body" style="color:var(--ink-3)">
         <p style="margin:0 0 6px">Отправок пока не было.</p>
-        <p class="hint" style="margin:0">Здесь появится по строке на каждое напоминание
+        <p class="hint" style="margin:0">Здесь появится по строке на каждое уведомление
            за каждый день: во сколько оно должно было уйти, ушло ли, и скольким
            людям дошло.</p>
       </div>`;
@@ -245,7 +246,7 @@ function drawHistory(wrap) {
       <thead><tr>
         <th style="width:110px">Дата</th>
         <th style="width:90px">План</th>
-        <th style="width:250px">Напоминание</th>
+        <th style="width:250px">Уведомление</th>
         <th style="width:130px">Статус</th>
         <th style="width:100px">Попыток</th>
         <th style="width:170px">Доставлено</th>
@@ -282,16 +283,17 @@ function runHTML(r) {
 
 function rowHTML(r) {
   const count = audienceCount(r.audience);
+  const kitchen = r.audience?.mode === 'kitchen';
   return `
     <tr>
       <td class="num">${r.id}</td>
       <td style="font-weight:700">${esc(r.name)}</td>
       <td>${esc(daysText(r.days))}</td>
       <td class="num">${esc(r.time_of_day || '—')}</td>
-      <td style="color:var(--ink-2)">${esc(preview(r.text))}</td>
+      <td style="color:var(--ink-2)">${esc(kitchen ? 'Список на приготовление' : preview(r.text))}</td>
       <td>
         <span class="pill">${esc(audienceText(r.audience))}</span>
-        <div class="hint" style="margin:4px 0 0">${count} чел.</div>
+        <div class="hint" style="margin:4px 0 0">${kitchen ? 'подтверждённые на сегодня' : `${count} чел.`}</div>
       </td>
       <td>${r.enabled
         ? '<span class="pill pill--on">Включено</span>'
@@ -320,7 +322,7 @@ const preview = (text) => {
 async function toggle(r) {
   try {
     await api.patch(`/api/admin/reminders/${r.id}`, { enabled: !r.enabled });
-    toast(r.enabled ? 'Напоминание выключено' : 'Напоминание включено');
+    toast(r.enabled ? 'Уведомление выключено' : 'Уведомление включено');
     await load(true);
   } catch (e) {
     toast(e.message, 'err');
@@ -330,6 +332,17 @@ async function toggle(r) {
 /* Sending by hand is the only way to see what users will get without waiting
    for the schedule, so it is worth a confirmation with the count in it. */
 function sendNow(r) {
+  if (r.audience?.mode === 'kitchen') {
+    return confirmDialog('Отправить сейчас',
+      `Отправить в группу кухни список по подтверждённым заказам на сегодня? ` +
+      'На расписание это не влияет.',
+      async () => {
+        const res = await api.post(`/api/admin/reminders/${r.id}/test`);
+        toast(`Отправлено на кухню — заказов: ${res.orders}`);
+      },
+      'Отправить');
+  }
+
   const count = audienceCount(r.audience);
   confirmDialog('Отправить сейчас',
     `Отправить «${r.name}» прямо сейчас? Получат ${count} чел. ` +
@@ -357,14 +370,14 @@ function openForm(reminder) {
   };
 
   modal({
-    title: isNew ? 'Новое напоминание' : `Изменить: ${reminder.name}`,
+    title: isNew ? 'Новое уведомление' : `Изменить: ${reminder.name}`,
     submitLabel: isNew ? 'Создать' : 'Сохранить',
     wide: true,
     bodyHTML: `
       <div class="field">
         <label class="field__label" for="rf-name">Название</label>
         <input class="input" id="rf-name" name="name" maxlength="80" required
-               placeholder="Ежедневное напоминание о заказе"
+               placeholder="Ежедневное уведомление о заказе"
                value="${esc(reminder?.name || '')}">
         <p class="hint">Видно только здесь — пользователям уходит текст ниже.</p>
       </div>
@@ -406,6 +419,7 @@ function openForm(reminder) {
           <button type="button" data-v="all"       aria-pressed="${draft.mode === 'all'}">Всем</button>
           <button type="button" data-v="companies" aria-pressed="${draft.mode === 'companies'}">Компаниям</button>
           <button type="button" data-v="users"     aria-pressed="${draft.mode === 'users'}">Отдельным людям</button>
+          <button type="button" data-v="kitchen"   aria-pressed="${draft.mode === 'kitchen'}">Кухне</button>
         </div>
         <p class="hint" id="rf-count-people">—</p>
       </div>
@@ -418,7 +432,7 @@ function openForm(reminder) {
           <input type="checkbox" name="enabled" ${reminder?.enabled !== false ? 'checked' : ''}>
           <span class="switch__track"></span>
         </label>
-        <p class="hint">Выключенное напоминание остаётся здесь, но не отправляется.</p>
+        <p class="hint">Выключенное уведомление остаётся здесь, но не отправляется.</p>
       </div>`,
 
     onSubmit: async (data) => {
@@ -432,7 +446,7 @@ function openForm(reminder) {
         name: data.name,
         days: [...draft.days].sort((x, y) => x - y),
         time_of_day: data.time_of_day,
-        text: data.text,
+        text: draft.mode === 'kitchen' ? '' : data.text,
         enabled: data.enabled === 'on',
         audience: {
           mode: draft.mode,
@@ -442,7 +456,7 @@ function openForm(reminder) {
       };
       if (isNew) {
         await api.post('/api/admin/reminders', payload);
-        toast('Напоминание создано');
+        toast('Уведомление создано');
       } else {
         await api.patch(`/api/admin/reminders/${reminder.id}`, payload);
         toast('Изменения сохранены');
@@ -490,6 +504,11 @@ function wireForm(draft) {
 
   const people = box.querySelector('#rf-count-people');
   const paintPeople = () => {
+    if (draft.mode === 'kitchen') {
+      people.textContent = 'В группу кухни уйдёт список на приготовление ' +
+        'по подтверждённым заказам на сегодня — как по кнопке «На кухню».';
+      return;
+    }
     const n = audienceCount({
       mode: draft.mode, company_ids: draft.company_ids, user_ids: draft.user_ids
     });
@@ -499,7 +518,12 @@ function wireForm(draft) {
 
   const slot = box.querySelector('#rf-picker');
   const drawPicker = () => {
-    if (draft.mode === 'all') { slot.innerHTML = ''; paintPeople(); return; }
+    // the kitchen list writes itself, so there is no text to ask for
+    const kitchen = draft.mode === 'kitchen';
+    text.closest('.field').hidden = kitchen;
+    text.required = !kitchen;
+
+    if (draft.mode === 'all' || kitchen) { slot.innerHTML = ''; paintPeople(); return; }
 
     const isCompanies = draft.mode === 'companies';
     const options = isCompanies

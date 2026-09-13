@@ -3,7 +3,7 @@ import { localNow, parseTime } from './orders.js';
 import { resolveAudience, deliver, MAX_TEXT } from './broadcasts.js';
 import { botConfigured } from './telegram.js';
 
-/* Напоминания — recurring messages on a weekly timetable.
+/* Уведомления — recurring messages on a weekly timetable.
 
    An admin fills in a name, the weekdays, a time, the text and who gets it.
    There is no cron expression anywhere in the product: the schedule is those
@@ -78,9 +78,11 @@ export function validate(body = {}, { partial = false } = {}) {
     value.time_of_day = time.text;
   }
 
+  // the kitchen gets the prep list, not a written message
+  const kitchen = body.audience?.mode === 'kitchen';
   if (!partial || 'text' in body) {
     const text = String(body.text || '').trim();
-    if (!text) return { error: 'Введите текст напоминания' };
+    if (!text && !kitchen) return { error: 'Введите текст уведомления' };
     if (text.length > MAX_TEXT) return { error: `Не больше ${MAX_TEXT} символов` };
     value.text = text;
   }
@@ -97,7 +99,8 @@ export function validate(body = {}, { partial = false } = {}) {
 /* The broadcasts helper reads the audience off the request body itself; a
    reminder keeps it nested under `audience`, so unwrap it first. */
 export function normaliseAudience(a = {}) {
-  const mode = ['companies', 'users'].includes(a?.mode) ? a.mode : 'all';
+  // 'kitchen' sends the prep list to the kitchen group instead of a text to people
+  const mode = ['companies', 'users', 'kitchen'].includes(a?.mode) ? a.mode : 'all';
   return {
     mode,
     company_ids: mode === 'companies'
@@ -240,6 +243,13 @@ async function claim(reminder, now) {
    the only thing that lets the next tick tell a send that worked from one
    that did not. */
 async function fire(reminder, run) {
+  // The cron-tick Edge Function sends the kitchen list. Here 'kitchen' must
+  // never fall through to resolveAudience, which reads unknown modes as "all".
+  if (reminder.audience?.mode === 'kitchen') {
+    await settle(run.id, { status: 'skipped', error: 'Список для кухни отправляет функция cron-tick' });
+    return 0;
+  }
+
   let recipients;
   try {
     recipients = await resolveAudience(reminder.audience || {});
@@ -258,7 +268,7 @@ async function fire(reminder, run) {
   try {
     const { data: broadcast, error } = await supabase.from('broadcasts').insert({
       sent_by: null,
-      sent_by_name: `Напоминание: ${reminder.name}`,
+      sent_by_name: `Уведомление: ${reminder.name}`,
       text: reminder.text,
       image_path: null,
       audience: reminder.audience || {},
