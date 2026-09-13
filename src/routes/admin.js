@@ -324,6 +324,43 @@ adminRouter.patch('/companies/:id', async (req, res) => {
   res.json(data);
 });
 
+/* The company's owner — one per company. Naming a new one demotes whoever
+   held it; null leaves the company without one. Admin rows are never touched:
+   admin is not a company role. */
+adminRouter.put('/companies/:id/owner', async (req, res) => {
+  const companyId = String(req.params.id);
+  const raw = req.body?.user_id;
+  const userId = raw === null || raw === undefined || raw === '' ? null : Number(raw);
+  if (userId !== null && !Number.isFinite(userId)) {
+    return res.status(400).json({ error: 'Неверный пользователь' });
+  }
+
+  if (userId !== null) {
+    const { data: user, error } = await supabase
+      .from('users').select('id, company_id, role').eq('id', userId).maybeSingle();
+    if (error) return dbError(res, error, 500);
+    if (!user || String(user.company_id) !== companyId) {
+      return res.status(400).json({ error: 'Владелец должен быть сотрудником этой компании' });
+    }
+    if (user.role === 'admin') {
+      return res.status(400).json({ error: 'Администратор не может быть владельцем компании' });
+    }
+  }
+
+  let demote = supabase.from('users')
+    .update({ role: 'employee' })
+    .eq('company_id', companyId).eq('role', 'owner');
+  if (userId !== null) demote = demote.neq('id', userId);
+  const { error: dErr } = await demote;
+  if (dErr) return dbError(res, dErr);
+
+  if (userId !== null) {
+    const { error: oErr } = await supabase.from('users').update({ role: 'owner' }).eq('id', userId);
+    if (oErr) return dbError(res, oErr);
+  }
+  res.json({ ok: true, owner_id: userId });
+});
+
 /* Reissue the code: the fast way to shut a company down.
 
    One write makes every employee stale, and they come back one at a time as

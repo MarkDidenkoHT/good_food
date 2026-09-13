@@ -350,6 +350,7 @@ function companyForm(company) {
                placeholder="необязательно">
         <p class="hint">Если указан — передаётся в FrontPad вместе с заказом.</p>
       </div>
+      ${isNew ? '' : ownerField(company)}
       <div class="field" style="margin-bottom:0">
         <label class="switch">
           <span style="font-weight:700">Доступ разрешён</span>
@@ -370,6 +371,14 @@ function companyForm(company) {
         toast('Компания создана');
       } else {
         await api.patch(`/api/admin/companies/${company.id}`, payload);
+        // a disabled select (no staff yet) sends nothing: leave the owner alone
+        if (d.owner_id !== undefined) {
+          const before = rows.find((u) => u.company_id === company.id && u.role === 'owner')?.id ?? null;
+          const chosen = d.owner_id ? Number(d.owner_id) : null;
+          if (chosen !== before) {
+            await api.put(`/api/admin/companies/${company.id}/owner`, { user_id: chosen });
+          }
+        }
         toast('Сохранено');
       }
       await load();
@@ -384,6 +393,26 @@ function companyForm(company) {
 
   const rotate = document.getElementById('c-rotate');
   if (rotate) rotate.onclick = () => rotateCode(company);
+}
+
+/* Only this company's own people can own it; admin is not a company role. */
+function ownerField(company) {
+  const staff = rows.filter((u) => u.company_id === company.id && u.role !== 'admin');
+  const current = staff.find((u) => u.role === 'owner');
+  return `
+      <div class="field">
+        <label class="field__label" for="c-owner">Владелец</label>
+        <select class="input" id="c-owner" name="owner_id" ${staff.length ? '' : 'disabled'}>
+          <option value="">— нет —</option>
+          ${staff.map((u) => `
+            <option value="${u.id}" ${u === current ? 'selected' : ''}>
+              ${esc(u.user_name || `#${u.id}`)}
+            </option>`).join('')}
+        </select>
+        <p class="hint">${staff.length
+          ? 'Один на компанию: новый владелец заменяет прежнего, тот становится сотрудником.'
+          : 'В компании пока нет сотрудников — назначить некого.'}</p>
+      </div>`;
 }
 
 /* Reissuing the code shuts the whole company out of the app until somebody
