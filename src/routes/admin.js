@@ -992,6 +992,16 @@ adminRouter.put('/settings/orders', async (req, res) => {
     key: 'orders', value, updated_at: new Date().toISOString()
   });
   if (error) return dbError(res, error);
+
+  // The kitchen prep list goes out when the day closes, so kitchen reminders
+  // follow the time limit.
+  if ('cutoff_time' in req.body) {
+    const { error: syncErr } = await supabase.from('reminders')
+      .update({ time_of_day: value.cutoff_time, updated_at: new Date().toISOString() })
+      .eq('audience->>mode', 'kitchen');
+    if (syncErr) return dbError(res, syncErr);
+  }
+
   res.json({ ok: true, value });
 });
 
