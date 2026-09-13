@@ -131,7 +131,6 @@ function audienceText(a = {}) {
     }
     return `${n} чел.`;
   }
-  if (a.mode === 'kitchen') return 'группе кухни';
   return 'всем';
 }
 
@@ -283,17 +282,16 @@ function runHTML(r) {
 
 function rowHTML(r) {
   const count = audienceCount(r.audience);
-  const kitchen = r.audience?.mode === 'kitchen';
   return `
     <tr>
       <td class="num">${r.id}</td>
       <td style="font-weight:700">${esc(r.name)}</td>
       <td>${esc(daysText(r.days))}</td>
       <td class="num">${esc(r.time_of_day || '—')}</td>
-      <td style="color:var(--ink-2)">${esc(kitchen ? 'Список на приготовление' : preview(r.text))}</td>
+      <td style="color:var(--ink-2)">${esc(preview(r.text))}</td>
       <td>
         <span class="pill">${esc(audienceText(r.audience))}</span>
-        <div class="hint" style="margin:4px 0 0">${kitchen ? 'подтверждённые на сегодня' : `${count} чел.`}</div>
+        <div class="hint" style="margin:4px 0 0">${count} чел.</div>
       </td>
       <td>${r.enabled
         ? '<span class="pill pill--on">Включено</span>'
@@ -332,17 +330,6 @@ async function toggle(r) {
 /* Sending by hand is the only way to see what users will get without waiting
    for the schedule, so it is worth a confirmation with the count in it. */
 function sendNow(r) {
-  if (r.audience?.mode === 'kitchen') {
-    return confirmDialog('Отправить сейчас',
-      `Отправить в группу кухни список по подтверждённым заказам на сегодня? ` +
-      'На расписание это не влияет.',
-      async () => {
-        const res = await api.post(`/api/admin/reminders/${r.id}/test`);
-        toast(`Отправлено на кухню — заказов: ${res.orders}`);
-      },
-      'Отправить');
-  }
-
   const count = audienceCount(r.audience);
   confirmDialog('Отправить сейчас',
     `Отправить «${r.name}» прямо сейчас? Получат ${count} чел. ` +
@@ -419,7 +406,6 @@ function openForm(reminder) {
           <button type="button" data-v="all"       aria-pressed="${draft.mode === 'all'}">Всем</button>
           <button type="button" data-v="companies" aria-pressed="${draft.mode === 'companies'}">Компаниям</button>
           <button type="button" data-v="users"     aria-pressed="${draft.mode === 'users'}">Отдельным людям</button>
-          <button type="button" data-v="kitchen"   aria-pressed="${draft.mode === 'kitchen'}">Кухне</button>
         </div>
         <p class="hint" id="rf-count-people">—</p>
       </div>
@@ -446,7 +432,7 @@ function openForm(reminder) {
         name: data.name,
         days: [...draft.days].sort((x, y) => x - y),
         time_of_day: data.time_of_day,
-        text: draft.mode === 'kitchen' ? '' : data.text,
+        text: data.text,
         enabled: data.enabled === 'on',
         audience: {
           mode: draft.mode,
@@ -504,11 +490,6 @@ function wireForm(draft) {
 
   const people = box.querySelector('#rf-count-people');
   const paintPeople = () => {
-    if (draft.mode === 'kitchen') {
-      people.textContent = 'В группу кухни уйдёт список на приготовление ' +
-        'по подтверждённым заказам на сегодня — как по кнопке «На кухню».';
-      return;
-    }
     const n = audienceCount({
       mode: draft.mode, company_ids: draft.company_ids, user_ids: draft.user_ids
     });
@@ -518,12 +499,7 @@ function wireForm(draft) {
 
   const slot = box.querySelector('#rf-picker');
   const drawPicker = () => {
-    // the kitchen list writes itself, so there is no text to ask for
-    const kitchen = draft.mode === 'kitchen';
-    text.closest('.field').hidden = kitchen;
-    text.required = !kitchen;
-
-    if (draft.mode === 'all' || kitchen) { slot.innerHTML = ''; paintPeople(); return; }
+    if (draft.mode === 'all') { slot.innerHTML = ''; paintPeople(); return; }
 
     const isCompanies = draft.mode === 'companies';
     const options = isCompanies

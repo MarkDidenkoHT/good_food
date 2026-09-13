@@ -568,7 +568,9 @@ function fpLogHTML() {
         <th style="width:130px">Итог</th><th>Подробности</th>
       </tr></thead>
       <tbody>${fpLog.rows.map((r) => {
-        const verdict = r.simulated
+        const verdict = r.action === 'skipped'
+          ? '<span class="pill">пропущен</span>'
+          : r.simulated
           ? `<span class="pill">${r.ok ? 'симуляция' : 'симуляция: ошибка'}</span>`
           : `<span class="pill ${r.ok ? 'pill--on' : 'pill--off'}">${r.ok ? 'отправлен' : 'ошибка'}</span>`;
         const detail = [

@@ -75,12 +75,13 @@ async function post(action, payload) {
 
 function pad(n) { return String(n).padStart(2, '0'); }
 
-/* The service day + 1, at delivery_time — "tomorrow 10:00" in the old script,
-   but counted from the day the order belongs to rather than from the moment
-   it happens to be sent. */
-export function deliveryDatetime(order, settings) {
-  const day = order?.service_date || localDate(new Date(order?.created_at || Date.now()));
-  const [y, m, d] = String(day).slice(0, 10).split('-').map(Number);
+/* The day it is sent + 1, at delivery_time — "tomorrow 10:00", as in the old
+   script. Counted from the moment of sending rather than from service_date:
+   an order confirmed (or resent) days late would otherwise carry a delivery
+   time already in the past, which FrontPad refuses and replaces with its own. */
+export function deliveryDatetime(settings, now = new Date()) {
+  const day = localDate(now);
+  const [y, m, d] = day.split('-').map(Number);
   const next = new Date(Date.UTC(y, m - 1, d + 1));
   const [hh, mm] = String(settings.delivery_time || '10:00').split(':');
   return `${next.getUTCFullYear()}-${pad(next.getUTCMonth() + 1)}-${pad(next.getUTCDate())} ` +
@@ -134,7 +135,7 @@ async function buildPayload(order, settings, log) {
     secret: KEY(),
     name: store,
     descr: `${store} #${order.id}` + (isReturn ? ' (возврат)' : '') + (order.comment ? ` — ${order.comment}` : ''),
-    datetime: deliveryDatetime(order, settings)
+    datetime: deliveryDatetime(settings)
   };
   if (company?.phone) payload.phone = company.phone;
   products.forEach((p, i) => {
@@ -142,6 +143,26 @@ async function buildPayload(order, settings, log) {
     payload[`product_kol[${i}]`] = String(p.qty);
   });
   return { payload, products };
+}
+
+const SKIP_REASONS = {
+  disabled: 'Передача в FrontPad выключена',
+  return: 'Передача возвратов выключена',
+  already_sent: 'Уже передан в FrontPad'
+};
+
+/* A skip is not an error, but it is an outcome: the order was confirmed and
+   did not reach FrontPad. Without a trace here it looks exactly like one that
+   did — nothing in the orders table, nothing in the log. */
+async function skip(order, reason, log) {
+  const error = SKIP_REASONS[reason];
+  log.info(`skipped — ${error}`);
+  await writeLog({ order_id: order.id, action: 'skipped', ok: true, error });
+  // 'sent' is the truth about an order already in FrontPad; never overwrite it
+  if (reason !== 'already_sent') {
+    await markOrder(order.id, { frontpad_status: 'skipped', frontpad_error: error });
+  }
+  return { ok: true, skipped: reason };
 }
 
 async function markOrder(orderId, patch) {
@@ -179,18 +200,9 @@ async function pushOrderNow(order) {
   const log = logger(order?.id, settings.verbose);
 
   try {
-    if (!settings.enabled) {
-      log.debug('skipped — integration is off');
-      return { ok: true, skipped: 'disabled' };
-    }
-    if (order.kind === 'return' && !settings.send_returns) {
-      log.debug('skipped — returns are not sent to FrontPad');
-      return { ok: true, skipped: 'return' };
-    }
-    if (order.frontpad_status === 'sent') {
-      log.warn(`skipped — already sent (FrontPad id ${order.frontpad_order_id})`);
-      return { ok: true, skipped: 'already_sent' };
-    }
+    if (!settings.enabled) return await skip(order, 'disabled', log);
+    if (order.kind === 'return' && !settings.send_returns) return await skip(order, 'return', log);
+    if (order.frontpad_status === 'sent') return await skip(order, 'already_sent', log);
     if (!settings.simulation && !frontpadConfigured()) {
       const error = 'FRONTPAD_APIKEY не задан на сервере';
       log.warn(error);

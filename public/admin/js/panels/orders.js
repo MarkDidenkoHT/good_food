@@ -247,7 +247,7 @@ function rowHTML(o) {
         ${o.status === 'new' ? `
           <button class="btn btn--sm btn--primary" data-decide="${o.id}" data-status="confirmed">Принять</button>
           <button class="btn btn--sm" data-decide="${o.id}" data-status="rejected">Отклонить</button>` : ''}
-        ${o.status === 'confirmed' && ['failed', 'simulated', 'none'].includes(o.frontpad_status || 'none')
+        ${o.status === 'confirmed' && ['failed', 'simulated', 'skipped', 'none'].includes(o.frontpad_status || 'none')
           && (o.kind === 'order' || o.frontpad_status !== 'none') ? `
           <button class="btn btn--sm" data-fp="${o.id}" title="Передать заказ в FrontPad">В FrontPad</button>` : ''}
         <button class="btn btn--ghost btn--icon btn--sm" data-invoice="${o.id}" title="Скачать накладную"><span data-icon="print"></span></button>
@@ -300,9 +300,11 @@ function frontpadNote(o) {
   const text = {
     sent: `FrontPad №${esc(o.frontpad_order_number || o.frontpad_order_id || '')}`,
     simulated: 'FrontPad: симуляция',
-    failed: 'FrontPad: ошибка'
+    failed: 'FrontPad: ошибка',
+    skipped: 'FrontPad: не передан'
   }[s];
-  const color = s === 'failed' ? 'color:var(--err, #c0392b)' : '';
+  const color = s === 'failed' ? 'color:var(--err, #c0392b)'
+    : s === 'skipped' ? 'color:var(--warn, #b7791f)' : '';
   return `<div class="hint" style="margin:4px 0 0;${color}"
     title="${esc(o.frontpad_error || '')}">${text}</div>`;
 }
