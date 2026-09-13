@@ -450,3 +450,27 @@ input[type="date"].input--sm { min-width: 140px; }
 .imgpick--lg .imgpick__preview { width: 168px; height: 168px; flex: 0 0 168px; }
 .imgpick__actions { flex: 1 1 auto; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .imgpick__actions .hint { width: 100%; margin: 0; }
+
+/* ── statistics ─────────────────────────────────────────────────── */
+.kpis {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+.kpi { padding: 14px 16px; border-right: 1px solid var(--line); }
+.kpi:last-child { border-right: 0; }
+.kpi__label {
+  font-size: 11px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .6px; color: var(--ink-3);
+}
+.kpi__value { font-size: 22px; font-weight: 800; letter-spacing: -.3px; margin-top: 2px; white-space: nowrap; }
+.kpi__note { font-size: 12px; color: var(--ink-3); }
+
+.th-sort {
+  border: 0; background: none; padding: 0; cursor: pointer; white-space: nowrap;
+  font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit;
+}
+.th-sort:hover, .th-sort[aria-sort] { color: var(--ink); }
+.th-sort__arrow { display: inline-block; width: 12px; margin-left: 3px; font-size: 9px; }
+
+.share { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.share__bar { width: 60px; height: 6px; border-radius: var(--r-pill); background: var(--surface-2); overflow: hidden; }
+.share__bar span { display: block; height: 100%; background: var(--brand); }

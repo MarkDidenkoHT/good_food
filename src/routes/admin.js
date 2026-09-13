@@ -402,6 +402,29 @@ adminRouter.get('/orders', async (req, res) => {
   res.json(data);
 });
 
+/* Every order in the range, trimmed to what the statistics tab counts. Paged
+   past the 1000-row cap, since "all time" is exactly when the totals matter. */
+adminRouter.get('/stats', async (req, res) => {
+  const { from, to } = req.query;
+  const PAGE = 1000;
+  const out = [];
+  for (let at = 0; ; at += PAGE) {
+    let q = supabase
+      .from('orders')
+      .select('id, kind, status, total, items, company_id, user_id, created_at')
+      .order('id', { ascending: true })
+      .range(at, at + PAGE - 1);
+    if (from) q = q.gte('created_at', String(from));
+    if (to) q = q.lte('created_at', String(to));
+
+    const { data, error } = await q;
+    if (error) return dbError(res, error, 500);
+    out.push(...data);
+    if (data.length < PAGE) break;
+  }
+  res.json(out);
+});
+
 /* Confirm or reject. Deciding twice is refused rather than silently
    re-notifying everyone. */
 adminRouter.post('/orders/:id/decide', async (req, res) => {

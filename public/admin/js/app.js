@@ -10,9 +10,10 @@ import { settingsPanel } from './panels/settings.js';
 import { ordersPanel } from './panels/orders.js';
 import { messagesPanel } from './panels/messages.js';
 import { remindersPanel } from './panels/reminders.js';
+import { statsPanel } from './panels/stats.js';
 
-/* Nav order: orders → items → users → settings → messages → reminders. */
-const panels = [ordersPanel, itemsPanel, usersPanel, settingsPanel, messagesPanel, remindersPanel];
+/* Nav order: orders → stats → items → users → settings → messages → reminders. */
+const panels = [ordersPanel, statsPanel, itemsPanel, usersPanel, settingsPanel, messagesPanel, remindersPanel];
 
 const $ = (sel) => document.querySelector(sel);
 let current = null;
