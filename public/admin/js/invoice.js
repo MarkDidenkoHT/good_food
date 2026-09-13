@@ -19,7 +19,7 @@ export const SUPPLIER = {
 const TITLE = { order: 'Расходная накладная', return: 'Возвратная накладная' };
 
 // column widths, A..F, in characters
-const COLS = [8, 46, 12, 12, 12, 14];
+const COLS = [7, 39, 10, 10, 10, 12];
 
 const RED = 'FF0000';
 
