@@ -61,14 +61,15 @@ appRouter.post('/company/rotate-code', async (req, res) => {
 });
 
 appRouter.get('/catalog', async (req, res) => {
-  const [items, categories, settings, orders, ownerReset] = await Promise.all([
+  const [items, categories, settings, orders, ownerReset, design] = await Promise.all([
     supabase.from('items')
       .select('id, item_name, item_category, item_cost, image_path, available')
       .order('item_name'),
     supabase.from('categories').select('id, category_name, image_path').order('category_name'),
     supabase.from('app_settings').select('key, value').eq('key', 'catalog').maybeSingle(),
     orderSettings(),
-    ownerResetAllowed()
+    ownerResetAllowed(),
+    supabase.from('app_settings').select('value').eq('key', 'design').maybeSingle()
   ]);
 
   if (items.error) return dbError(res, items.error, 500);
@@ -80,9 +81,11 @@ appRouter.get('/catalog', async (req, res) => {
 
   // The bucket is private: hand out short-lived signed links, and only when
   // images are switched on. image_path itself never reaches the client.
-  const urls = showImages
-    ? await signedUrlMap([...rows, ...cats].map((r) => r.image_path))
-    : {};
+  const backgroundPath = design.data?.value?.background_path || null;
+  const urls = await signedUrlMap([
+    ...(showImages ? [...rows, ...cats].map((r) => r.image_path) : []),
+    backgroundPath
+  ]);
 
   // Withdrawn items ship too: the mini-app hides them from the order list but
   // still offers them for a return.
@@ -100,6 +103,8 @@ appRouter.get('/catalog', async (req, res) => {
       image: showImages ? urls[c.image_path] || null : null
     })),
     group_by_category: Boolean(settings.data?.value?.group_by_category),
+    // shown whether or not item images are on
+    background: urls[backgroundPath] || null,
     orders: orderRules(orders),
     // draws the owner's «Перевыпустить код» button, and nothing more — the
     // endpoint checks both halves again for itself

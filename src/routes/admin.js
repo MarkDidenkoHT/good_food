@@ -601,7 +601,7 @@ adminRouter.post('/images',
     if (!extFor(contentType)) {
       return res.status(415).json({ error: 'Поддерживаются JPEG, PNG, WebP и GIF' });
     }
-    const FOLDERS = ['items', 'categories', 'broadcasts'];
+    const FOLDERS = ['items', 'categories', 'broadcasts', 'design'];
     const folder = FOLDERS.includes(req.query.folder) ? req.query.folder : 'items';
     try {
       const path = await uploadImage(req.body, contentType, folder);
@@ -900,7 +900,8 @@ const SETTING_DEFAULTS = {
   notifications: { notify_owner: true },
   orders: ORDER_DEFAULTS,
   frontpad: FRONTPAD_DEFAULTS,
-  auth: { allow_owner_reset: false }
+  auth: { allow_owner_reset: false },
+  design: { background_path: null }
 };
 
 adminRouter.get('/settings', async (req, res) => {
@@ -985,6 +986,26 @@ adminRouter.put('/settings/frontpad', async (req, res) => {
     key: 'frontpad', value, updated_at: new Date().toISOString()
   });
   if (error) return dbError(res, error);
+  res.json({ ok: true, value });
+});
+
+/* The mini-app background: a promo or a new feature, shown behind the
+   catalog. The picture it replaces is removed from the bucket. */
+adminRouter.put('/settings/design', async (req, res) => {
+  const { data: current } = await supabase
+    .from('app_settings').select('value').eq('key', 'design').maybeSingle();
+  const before = current?.value?.background_path || null;
+  const path = String(req.body?.background_path || '').trim() || null;
+  if (path && !path.startsWith('design/')) {
+    return res.status(400).json({ error: 'Неизвестное изображение' });
+  }
+
+  const value = { ...SETTING_DEFAULTS.design, ...(current?.value || {}), background_path: path };
+  const { error } = await supabase.from('app_settings').upsert({
+    key: 'design', value, updated_at: new Date().toISOString()
+  });
+  if (error) return dbError(res, error);
+  if (before && before !== path) removeImage(before);
   res.json({ ok: true, value });
 });
 

@@ -15,6 +15,17 @@ body {
   padding-bottom: 120px;          /* room for the cart bar */
 }
 
+/* Background picture from the admin panel. A fixed layer rather than
+   background-attachment: fixed, which iOS ignores. The veil keeps group
+   titles and empty-state text readable over any picture. */
+body.has-bg::before {
+  content: ""; position: fixed; inset: 0; z-index: -1;
+  background:
+    linear-gradient(color-mix(in srgb, var(--bg) 55%, transparent),
+                    color-mix(in srgb, var(--bg) 55%, transparent)),
+    var(--app-bg-image) center / cover no-repeat;
+}
+
 /* One centred column. On a phone it is the whole screen; on a desktop it
    keeps the price and the stepper within a glance of the item name instead
    of throwing them to opposite edges. */

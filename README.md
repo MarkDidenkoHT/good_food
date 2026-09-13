@@ -10,6 +10,7 @@ src/lib/         Supabase, авторизация, Telegram, FrontPad, зака�
 src/routes/      auth.js, admin.js, app.js (API мини-приложения), telegram.js
 public/admin/    админ-панель
 public/app/      мини-приложение Telegram
+db/migrations/   миграции для существующей базы
 ```
 
 ## Запуск

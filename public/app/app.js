@@ -24,7 +24,7 @@ const view = document.getElementById('view');
 let me = null;
 let catalog = {
   items: [], categories: [], group_by_category: false, show_images: false,
-  image_size: 'md',
+  image_size: 'md', background: null,
   orders: {
     cutoff_enabled: false, allow_delete_new: false,
     allow_edit_confirmed: false, ordering_blocked: false
@@ -182,6 +182,7 @@ async function submitJoin(code) {
 async function refreshRules() {
   try {
     catalog = await get('/api/app/catalog');
+    paintBackground();
     pruneOrderCart();
   } catch { /* leave the last known catalog in place */ }
 }
@@ -202,7 +203,15 @@ async function openApp() {
   } catch {
     return centered('Не удалось загрузить каталог', 'Попробуйте позже.');
   }
+  paintBackground();
   render();
+}
+
+/* The picture an admin set in Настройки → Оформление, if any. */
+function paintBackground() {
+  const url = catalog.background;
+  document.body.classList.toggle('has-bg', Boolean(url));
+  document.body.style.setProperty('--app-bg-image', url ? `url("${url.replace(/"/g, '%22')}")` : 'none');
 }
 
 /* ── render ─────────────────────────────────────────────────── */

@@ -13,6 +13,7 @@ let settings = {
   catalog: { group_by_category: false, show_images: false },
   notifications: { notify_owner: true },
   auth: { allow_owner_reset: false },
+  design: { background_path: null },
   orders: {
     allow_edit_confirmed: false, allow_delete_new: false,
     returns_from_history: false,
@@ -79,6 +80,7 @@ function draw() {
   const ownerReset = !!settings.auth?.allow_owner_reset;
   const images = !!settings.catalog?.show_images;
   const imgSize = settings.catalog?.image_size || 'md';
+  const bgPath = settings.design?.background_path || null;
   const o = settings.orders || {};
   const cutoffOn = !!o.cutoff_enabled;
   const lockAfter = o.lock_after_cutoff !== false;
@@ -126,6 +128,27 @@ function draw() {
           <p class="hint">Насколько крупно позиции показаны в списке: 40, 60 или 80&nbsp;пикселей.</p>
         </div>
         <div id="settings-error"></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card__head"><div class="card__title">Оформление</div></div>
+      <div class="card__body">
+        <div class="field" style="margin-bottom:0">
+          <span class="field__label">Фон приложения</span>
+          <div class="imgpick imgpick--lg">
+            <div class="imgpick__preview">
+              ${bgPath ? `<img src="/api/admin/images/view?path=${encodeURIComponent(bgPath)}" alt="">` : '<span>нет</span>'}
+            </div>
+            <div class="imgpick__actions">
+              <input type="file" id="bg-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
+              <button type="button" class="btn btn--sm" id="bg-choose">Загрузить</button>
+              <button type="button" class="btn btn--sm" id="bg-clear" ${bgPath ? '' : 'disabled'}>Убрать</button>
+              <p class="hint" id="bg-hint">Новинка или акция за каталогом в мини-приложении.
+                 JPEG, PNG, WebP или GIF, до 5 МБ. Лучше вертикальная картинка.</p>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -259,11 +282,11 @@ function draw() {
           <div class="alert__title">Режим симуляции</div>
           <p>Заказ собирается полностью (артикулы, дата, телефон) и пишется в
              журнал ниже, но <b>в FrontPad ничего не уходит</b>. Когда в журнале
-             всё сходится — переключите на Активный.</p>
+             всё сходится — переключите на «Боевой».</p>
         </div>` : ''}
         ${fpOn && !fpSim ? `
         <div class="alert alert--err" style="margin:0 0 16px">
-          <div class="alert__title">Активный режим</div>
+          <div class="alert__title">Боевой режим</div>
           <p>Каждый подтверждённый заказ создаётся в FrontPad. Если FrontPad
              откажет — заказ не подтвердится, и вы увидите причину.</p>
         </div>` : ''}
@@ -283,7 +306,7 @@ function draw() {
           <span class="field__label">Режим</span>
           <div class="seg" id="seg-fp-sim">
             <button data-v="on"  aria-pressed="${fpSim}">Симуляция</button>
-            <button data-v="off" aria-pressed="${!fpSim}">Активный</button>
+            <button data-v="off" aria-pressed="${!fpSim}">Боевой</button>
           </div>
         </div>
 
@@ -368,6 +391,13 @@ function draw() {
     b.onclick = () => saveCatalog({ image_size: b.dataset.v });
   });
 
+  const bgFile = card.querySelector('#bg-file');
+  card.querySelector('#bg-choose').onclick = () => bgFile.click();
+  bgFile.onchange = () => uploadBackground(bgFile.files?.[0]);
+  card.querySelector('#bg-clear').onclick = () =>
+    confirmDialog('Убрать фон', 'Фон исчезнет из мини-приложения. Убрать?',
+      () => saveDesign({ background_path: null }), 'Убрать');
+
   card.querySelectorAll('#seg-notify button').forEach((b) => {
     b.onclick = () => saveNotify(b.dataset.v === 'both');
   });
@@ -392,7 +422,7 @@ function draw() {
     b.onclick = () => {
       const sim = b.dataset.v === 'on';
       if (!sim && settings.frontpad?.simulation !== false) {
-        return confirmDialog('Активный режим FrontPad',
+        return confirmDialog('Боевой режим FrontPad',
           'С этого момента каждый подтверждённый заказ будет создаваться в FrontPad по-настоящему. Включить?',
           () => saveFrontpad({ simulation: false }), 'Включить');
       }
@@ -510,6 +540,52 @@ async function saveCatalog(patch) {
     settings.catalog = before;
     draw();
     toast(e.message, 'err');
+  }
+}
+
+/* Upload first, then point the setting at it. The server removes the
+   picture being replaced; an upload the save refused is removed here. */
+async function uploadBackground(f) {
+  if (!f) return;
+  const hint = root?.querySelector('#bg-hint');
+  if (f.size > 5 * 1024 * 1024) { if (hint) hint.textContent = 'Файл больше 5 МБ'; return; }
+  if (hint) hint.textContent = 'Загрузка…';
+
+  let path;
+  try {
+    // raw body, not multipart: one file and no form fields to encode
+    const res = await fetch('/api/admin/images?folder=design', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': f.type },
+      body: f
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Не удалось загрузить');
+    path = data.path;
+  } catch (e) {
+    if (hint) hint.textContent = e.message;
+    return;
+  }
+
+  if (!await saveDesign({ background_path: path })) {
+    api.del(`/api/admin/images?path=${encodeURIComponent(path)}`).catch(() => {});
+  }
+}
+
+async function saveDesign(patch) {
+  const before = settings.design;
+  try {
+    const res = await api.put('/api/admin/settings/design', patch);
+    settings.design = res.value;
+    draw();
+    toast('Настройка сохранена');
+    return true;
+  } catch (e) {
+    settings.design = before;
+    draw();
+    toast(e.message, 'err');
+    return false;
   }
 }
 
