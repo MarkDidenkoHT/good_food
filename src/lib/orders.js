@@ -1,4 +1,4 @@
-import { supabase } from './supabase.js';
+import { db } from './db.js';
 
 /* When a customer may still change an order, and whether the shop is taking
    new ones at all. Two independent questions, settled by two groups of
@@ -34,7 +34,7 @@ export const ORDER_DEFAULTS = {
 };
 
 export async function orderSettings() {
-  const { data } = await supabase
+  const { data } = await db
     .from('app_settings').select('value').eq('key', 'orders').maybeSingle();
   return { ...ORDER_DEFAULTS, ...(data?.value || {}) };
 }
@@ -188,7 +188,7 @@ export async function priceLines(wanted, { forOrder = false } = {}) {
   const ids = [...new Set((wanted || []).map((l) => Number(l?.id)).filter(Number.isFinite))];
   if (!ids.length) return { lines: [], total: 0, blocked: [] };
 
-  const { data: known, error } = await supabase
+  const { data: known, error } = await db
     .from('items').select('id, item_name, item_cost, available').in('id', ids);
   if (error) throw error;
 
@@ -219,7 +219,7 @@ export async function priceLines(wanted, { forOrder = false } = {}) {
 
 /* Returns null when the order is not one this company may return against. */
 export async function returnableFrom(orderId, companyId) {
-  const { data: order, error } = await supabase
+  const { data: order, error } = await db
     .from('orders')
     .select('id, company_id, kind, status, items, created_at, service_date')
     .eq('id', orderId)
@@ -231,7 +231,7 @@ export async function returnableFrom(orderId, companyId) {
   if (order.kind !== 'order') return null;          // you cannot return a return
   if (order.status === 'rejected') return null;     // never delivered
 
-  const { data: prior, error: pErr } = await supabase
+  const { data: prior, error: pErr } = await db
     .from('orders')
     .select('items')
     .eq('source_order_id', orderId)

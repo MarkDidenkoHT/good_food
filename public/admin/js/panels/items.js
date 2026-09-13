@@ -12,6 +12,7 @@ let tab = 'items';       // items | categories | materials
 let query = '';
 let root;
 let sendReturns = false;   // Настройки → FrontPad → Возвраты: shows the return article field
+let useCost = true;        // Настройки → Себестоимость сырья: shows material costs
 
 const money = (v) => (v === null || v === undefined ? '—' : `${v} ₽`);
 
@@ -68,7 +69,14 @@ async function load(fresh = false) {
       api.get('/api/admin/materials', { fresh })
     ]);
     api.get('/api/admin/settings', { fresh })
-      .then((s) => { sendReturns = !!(s.frontpad?.enabled && s.frontpad?.send_returns); })
+      .then((s) => {
+        sendReturns = !!(s.frontpad?.enabled && s.frontpad?.send_returns);
+        const cost = s.materials?.use_cost !== false;
+        if (cost !== useCost) {
+          useCost = cost;
+          draw();
+        }
+      })
       .catch(() => {});
     draw();
   } catch (e) {
@@ -202,7 +210,7 @@ function drawMaterials(wrap, list) {
       <thead><tr>
         <th style="width:60px">ID</th><th>Название</th>
         <th style="width:130px">Учёт</th>
-        <th style="width:130px">Стоимость</th><th style="width:130px">Используется</th>
+        ${useCost ? '<th style="width:130px">Стоимость</th>' : ''}<th style="width:130px">Используется</th>
         <th style="width:110px"></th>
       </tr></thead>
       <tbody>${list.map((m) => `
@@ -210,7 +218,7 @@ function drawMaterials(wrap, list) {
           <td class="num">${m.id}</td>
           <td style="font-weight:700">${esc(m.material_name || '—')}</td>
           <td><span class="pill">${unitOf(m) === 'kg' ? 'по весу' : 'в штуках'}</span></td>
-          <td class="num">${money(m.cost)}${m.cost == null ? '' : ` / ${UNITS[unitOf(m)]}`}</td>
+          ${useCost ? `<td class="num">${money(m.cost)}${m.cost == null ? '' : ` / ${UNITS[unitOf(m)]}`}</td>` : ''}
           <td class="num">${items.filter((i) =>
             (Array.isArray(i.materials) ? i.materials : []).some((x) => x.id === m.id)).length}</td>
           ${rowActions(m.id)}
@@ -327,7 +335,7 @@ function materialForm(mat) {
         <label class="field__label" for="f-mat">Название сырья</label>
         <input class="input" id="f-mat" name="material_name" required value="${esc(mat?.material_name || '')}">
       </div>
-      <div class="field">
+      <div class="field" ${useCost ? '' : 'style="margin-bottom:0"'}>
         <span class="field__label">Учёт</span>
         <div class="seg" id="f-mat-unit">
           <button type="button" data-v="pcs" aria-pressed="${unit === 'pcs'}">В штуках</button>
@@ -336,14 +344,17 @@ function materialForm(mat) {
         <input type="hidden" name="unit" id="f-mat-unit-v" value="${unit}">
         <p class="hint" id="f-mat-unit-hint">${unitHint(unit)}</p>
       </div>
+      ${useCost ? `
       <div class="field" style="margin-bottom:0">
         <label class="field__label" for="f-mat-cost" id="f-mat-cost-label">${costLabel(unit)}</label>
         <input class="input" id="f-mat-cost" name="cost" type="number" min="0" step="1"
                value="${mat?.cost ?? ''}" placeholder="0">
         <p class="hint">Целое число. Можно оставить пустым.</p>
-      </div>`,
+      </div>` : ''}`,
     onSubmit: async (d) => {
-      const payload = { material_name: d.material_name, cost: d.cost, unit: d.unit };
+      const payload = { material_name: d.material_name, unit: d.unit };
+      // only sent when the field was on screen, so a hidden field never blanks it
+      if (useCost) payload.cost = d.cost;
       if (isNew) await api.post('/api/admin/materials', payload);
       else await api.patch(`/api/admin/materials/${mat.id}`, payload);
       toast(isNew ? 'Сырьё добавлено' : 'Сохранено');
@@ -356,7 +367,8 @@ function materialForm(mat) {
     b.onclick = () => {
       const u = b.dataset.v;
       document.getElementById('f-mat-unit-v').value = u;
-      document.getElementById('f-mat-cost-label').textContent = costLabel(u);
+      const label = document.getElementById('f-mat-cost-label');
+      if (label) label.textContent = costLabel(u);
       document.getElementById('f-mat-unit-hint').textContent = unitHint(u);
       seg.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
     };
@@ -447,7 +459,7 @@ function itemForm(item) {
                   <input type="checkbox" id="mat-${m.id}" value="${m.id}"
                          data-name="${esc(m.material_name)}" ${chosen.has(m.id) ? 'checked' : ''}>
                   <label for="mat-${m.id}">${esc(m.material_name)}</label>
-                  <span class="picker__cost">${money(m.cost)}${kg && m.cost != null ? ' / кг' : ''}</span>
+                  <span class="picker__cost">${useCost ? `${money(m.cost)}${kg && m.cost != null ? ' / кг' : ''}` : ''}</span>
                   <input type="number" class="picker__qty" data-qty-for="${m.id}" data-unit="${unitOf(m)}"
                          min="${kg ? '0.001' : '1'}" step="${kg ? '0.001' : '1'}"
                          value="${chosen.get(m.id) ?? (kg ? '0.1' : 1)}"
@@ -526,7 +538,7 @@ function itemForm(item) {
 
       const amounts = [pcs && `${fmtQty(pcs)} шт.`, kg && `${fmtQty(kg)} кг`].filter(Boolean);
       sum.textContent = rows.length
-        ? `Выбрано: ${rows.length} назв. · ${amounts.join(' · ')} · себестоимость ${total} ₽`
+        ? `Выбрано: ${rows.length} назв. · ${amounts.join(' · ')}${useCost ? ` · себестоимость ${total} ₽` : ''}`
         : 'Ничего не выбрано.';
     };
     box.addEventListener('change', recalc);

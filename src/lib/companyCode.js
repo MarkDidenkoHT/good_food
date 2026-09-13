@@ -1,4 +1,4 @@
-import { supabase } from './supabase.js';
+import { db } from './db.js';
 import { USER_COOKIE } from './auth.js';
 import { announceCodeRotated } from './notices.js';
 
@@ -53,7 +53,7 @@ export async function currentVersion(companyId) {
   const hit = cache.get(id);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.version;
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('companies').select('code_version').eq('id', id).maybeSingle();
   if (error) {
     console.error('[code] version lookup failed:', error);
@@ -99,7 +99,7 @@ export async function requireFreshCode(req, res, next) {
 export async function rotateCompanyCode(companyId, { actorName, keepUserId = null } = {}) {
   const id = Number(companyId);
 
-  const { data: company, error } = await supabase
+  const { data: company, error } = await db
     .from('companies').select('id, company_name, code_version').eq('id', id).maybeSingle();
   if (error) return { error };
   if (!company) return { notFound: true };
@@ -113,7 +113,7 @@ export async function rotateCompanyCode(companyId, { actorName, keepUserId = nul
   let code = null;
   for (let attempt = 0; attempt < 5 && !saved; attempt++) {
     const candidate = randomCode(6);
-    const { data, error: uErr } = await supabase
+    const { data, error: uErr } = await db
       .from('companies')
       .update({
         company_code: candidate,
@@ -137,12 +137,12 @@ export async function rotateCompanyCode(companyId, { actorName, keepUserId = nul
   cache.set(id, { version, at: Date.now() });
 
   if (keepUserId) {
-    await supabase.from('users').update({ code_version: version }).eq('id', keepUserId);
+    await db.from('users').update({ code_version: version }).eq('id', keepUserId);
   }
 
   // Who to tell. A blocked account is not a silent failure to explain later,
   // it is simply not a recipient.
-  const { data: staff } = await supabase
+  const { data: staff } = await db
     .from('users')
     .select('id, user_name, chat_id, role')
     .eq('company_id', id)

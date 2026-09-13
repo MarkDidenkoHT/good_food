@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { supabase } from '../lib/supabase.js';
+import { db } from '../lib/db.js';
 import { sendMessage, esc } from '../lib/telegram.js';
 
 export const telegramRouter = Router();
@@ -33,7 +33,7 @@ async function handleUpdate(update) {
   const cmd = text.split(/[\s@]/)[0];
 
   // Every chat the bot is in shows up here, so this is how you read a group
-  // id off the Render logs. getUpdates cannot be used once a webhook is set.
+  // id off the server logs (docker compose logs app). getUpdates cannot be used once a webhook is set.
   console.log(`[telegram] ${chat.type} chat_id=${chat.id} text=${text.slice(0, 40)}`);
 
   // /id works anywhere — the way to get a group id without getUpdates.
@@ -58,7 +58,7 @@ async function onStart(msg) {
     from.username ||
     `chat ${chatId}`;
 
-  const { data: existing, error: findErr } = await supabase
+  const { data: existing, error: findErr } = await db
     .from('users').select('id, user_name, access, company_id').eq('chat_id', chatId).maybeSingle();
 
   if (findErr) {
@@ -89,7 +89,7 @@ async function onStart(msg) {
      somebody found the bot, which is not something an operator can act on —
      the operators' group hears about this person when they enter a company
      code, because that is the first moment there is a company to name. */
-  const { error } = await supabase
+  const { error } = await db
     .from('users')
     .insert({
       user_name: displayName,

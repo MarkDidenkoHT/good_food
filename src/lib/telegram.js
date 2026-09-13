@@ -20,16 +20,19 @@ async function call(method, payload) {
     return null;
   }
 
+  // a picture uploaded from disk goes as multipart, everything else as JSON
+  const multipart = payload instanceof FormData;
+
   try {
     const res = await fetch(`${API}/bot${token}/${method}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      ...(multipart ? {} : { headers: { 'Content-Type': 'application/json' } }),
+      body: multipart ? payload : JSON.stringify(payload)
     });
     const data = await res.json();
     if (!data.ok) {
       console.error(`[telegram] ${method} failed:`, data.description,
-        '| payload:', JSON.stringify(payload).slice(0, 200));
+        '| payload:', multipart ? '[multipart]' : JSON.stringify(payload).slice(0, 200));
     }
     return data;
   } catch (err) {
@@ -63,17 +66,26 @@ export function editMessageText(chatId, messageId, text, extra = {}) {
   });
 }
 
-/* `photo` is a URL Telegram fetches itself — the bucket is private, so what
-   goes in is a short-lived signed link. The caption limit is 1024 characters,
-   which is why a broadcast's text is capped below it. */
+/* `photo` is a file_id Telegram already holds, or a picture read off the disk
+   ({ buffer, contentType, filename }) that goes up as a file — a self-hosted
+   server may not be reachable from outside, so Telegram is never asked to
+   fetch one by URL. The caption limit is 1024 characters, which is why a
+   broadcast's text is capped below it. */
 export function sendPhoto(chatId, photo, caption = '', extra = {}) {
   if (!chatId || !photo) return Promise.resolve(null);
-  return call('sendPhoto', {
+  const fields = {
     chat_id: chatId,
-    photo,
     ...(caption ? { caption, parse_mode: 'HTML' } : {}),
     ...extra
-  });
+  };
+  if (typeof photo === 'string') return call('sendPhoto', { ...fields, photo });
+
+  const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) {
+    form.append(key, typeof value === 'object' ? JSON.stringify(value) : String(value));
+  }
+  form.append('photo', new Blob([photo.buffer], { type: photo.contentType }), photo.filename);
+  return call('sendPhoto', form);
 }
 
 /* Recalls a message from a chat. Telegram refuses for reasons the caller can
@@ -82,6 +94,12 @@ export function sendPhoto(chatId, photo, caption = '', extra = {}) {
 export function deleteMessage(chatId, messageId) {
   if (!chatId || !messageId) return Promise.resolve(null);
   return call('deleteMessage', { chat_id: chatId, message_id: messageId });
+}
+
+/* Points the bot at this server. Telegram echoes `secret_token` back on every
+   update, and the webhook route refuses anything that does not carry it. */
+export function setWebhook(url, secret) {
+  return call('setWebhook', { url, ...(secret ? { secret_token: secret } : {}) });
 }
 
 /* Notify the operators' group. Silently does nothing when the group is not

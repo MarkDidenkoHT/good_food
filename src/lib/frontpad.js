@@ -10,13 +10,13 @@
  *                raw response), like the old script's _log calls.
  *
  * Every attempt, simulated or real, is written to frontpad_log so it can be
- * read back from the admin panel after Render's logs have rolled over.
+ * read back from the admin panel after the server logs have rolled over.
  *
  * Returns are skipped unless «Передавать возвраты» is on; then they go out
  * with each item's return article (frontpad_return_id).
  */
 
-import { supabase } from './supabase.js';
+import { db } from './db.js';
 import { localDate } from './orders.js';
 
 const API = 'https://app.frontpad.ru/api/index.php';
@@ -33,7 +33,7 @@ export const FRONTPAD_DEFAULTS = {
 };
 
 export async function frontpadSettings() {
-  const { data } = await supabase
+  const { data } = await db
     .from('app_settings').select('value').eq('key', 'frontpad').maybeSingle();
   return { ...FRONTPAD_DEFAULTS, ...(data?.value || {}) };
 }
@@ -50,7 +50,7 @@ function logger(orderId, verbose) {
 }
 
 async function writeLog(row) {
-  const { error } = await supabase.from('frontpad_log').insert(row);
+  const { error } = await db.from('frontpad_log').insert(row);
   if (error) console.error('[frontpad] could not write frontpad_log:', error.message);
 }
 
@@ -98,7 +98,7 @@ async function buildPayload(order, settings, log) {
   const lines = Array.isArray(order.items) ? order.items : [];
   const ids = [...new Set(lines.map((l) => Number(l?.id)).filter(Number.isFinite))];
   const { data: items, error } = ids.length
-    ? await supabase.from('items').select(`id, item_name, ${column}`).in('id', ids)
+    ? await db.from('items').select(`id, item_name, ${column}`).in('id', ids)
     : { data: [] };
   if (error) throw error;
   const byId = new Map((items || []).map((i) => [i.id, i]));
@@ -127,7 +127,7 @@ async function buildPayload(order, settings, log) {
   if (!products.length) return { error: 'В заказе нет позиций' };
 
   const { data: company } = order.company_id
-    ? await supabase.from('companies').select('company_name, phone').eq('id', order.company_id).maybeSingle()
+    ? await db.from('companies').select('company_name, phone').eq('id', order.company_id).maybeSingle()
     : { data: null };
   const store = company?.company_name || `Компания #${order.company_id ?? '—'}`;
 
@@ -166,7 +166,7 @@ async function skip(order, reason, log) {
 }
 
 async function markOrder(orderId, patch) {
-  const { error } = await supabase.from('orders').update(patch).eq('id', orderId);
+  const { error } = await db.from('orders').update(patch).eq('id', orderId);
   if (error) console.error(`[frontpad] #${orderId} could not save status:`, error.message);
 }
 
@@ -316,7 +316,7 @@ export async function testConnection() {
   const known = new Set((Array.isArray(resp.product_id) ? resp.product_id : Object.values(resp.product_id || {}))
     .map((a) => String(a).trim()));
 
-  const { data: items } = await supabase
+  const { data: items } = await db
     .from('items').select('item_name, frontpad_id, frontpad_return_id');
   const unknown = [];
   for (const i of items || []) {
@@ -331,7 +331,7 @@ export async function testConnection() {
 }
 
 export async function recentLog(limit = 50) {
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('frontpad_log').select('*')
     .order('created_at', { ascending: false })
     .limit(Math.min(200, Math.max(1, Number(limit) || 50)));

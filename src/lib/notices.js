@@ -1,5 +1,6 @@
-import { supabase } from './supabase.js';
+import { db } from './db.js';
 import { sendMessage, editMessageText, adminGroupId, esc } from './telegram.js';
+import { publicUrl } from './publicUrl.js';
 
 /* The "new user" post in the admin group is a living status line, not a
    one-off alert: every admin action on that user rewrites it in place. The
@@ -11,8 +12,9 @@ import { sendMessage, editMessageText, adminGroupId, esc } from './telegram.js';
    the code is the first moment there is a company to name, and a request
    naming its company is the one an operator can actually act on. */
 
-const panelUrl = (userId) => {
-  const base = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
+// no public address set (Настройки → Адрес сервера), no button
+const panelUrl = async (userId) => {
+  const base = await publicUrl();
   return base ? `${base}/admin#users?focus=${userId}` : null;
 };
 
@@ -40,8 +42,8 @@ function noticeText(user, opts = {}) {
 }
 
 // A deleted user has nothing left to open in the panel.
-function markup(user, { deleted = false } = {}) {
-  const url = deleted ? null : panelUrl(user.id);
+async function markup(user, { deleted = false } = {}) {
+  const url = deleted ? null : await panelUrl(user.id);
   if (!url) return undefined;
   return { inline_keyboard: [[{ text: '👤 Открыть в админ-панели', url }]] };
 }
@@ -56,13 +58,13 @@ export async function sendNewUserNotice(user, companyName = null) {
 
   const full = { ...user, company_name: companyName ?? user.company_name ?? null };
   const res = await sendMessage(group, noticeText(full), {
-    reply_markup: markup(full)
+    reply_markup: await markup(full)
   });
 
   const messageId = res?.result?.message_id;
   if (!messageId) return;
 
-  const { error } = await supabase
+  const { error } = await db
     .from('users').update({ notice_message_id: messageId }).eq('id', user.id);
   if (error) console.error('[notices] could not store message id:', error);
 }
@@ -76,14 +78,14 @@ export async function refreshUserNotice(user, opts = {}) {
 
   let company_name = null;
   if (user.company_id) {
-    const { data } = await supabase
+    const { data } = await db
       .from('companies').select('company_name').eq('id', user.company_id).maybeSingle();
     company_name = data?.company_name || null;
   }
 
   const full = { ...user, company_name };
   await editMessageText(group, user.notice_message_id, noticeText(full, opts), {
-    reply_markup: markup(full, opts)
+    reply_markup: await markup(full, opts)
   });
 }
 
@@ -153,8 +155,8 @@ const STATUS = {
   rejected:  '❌ <b>Отклонён</b>'
 };
 
-const orderUrl = (orderId) => {
-  const base = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
+const orderUrl = async (orderId) => {
+  const base = await publicUrl();
   return base ? `${base}/admin#orders?focus=${orderId}` : null;
 };
 
@@ -183,18 +185,18 @@ function orderText(order, { company, user } = {}) {
   ].filter((l) => l !== null).join('\n');
 }
 
-function orderMarkup(order) {
-  const url = orderUrl(order.id);
+async function orderMarkup(order) {
+  const url = await orderUrl(order.id);
   return url ? { inline_keyboard: [[{ text: '📋 Открыть в админ-панели', url }]] } : undefined;
 }
 
 async function orderContext(order) {
   const [company, user] = await Promise.all([
     order.company_id
-      ? supabase.from('companies').select('id, company_name').eq('id', order.company_id).maybeSingle()
+      ? db.from('companies').select('id, company_name').eq('id', order.company_id).maybeSingle()
       : Promise.resolve({ data: null }),
     order.user_id
-      ? supabase.from('users').select('id, user_name, chat_id').eq('id', order.user_id).maybeSingle()
+      ? db.from('users').select('id, user_name, chat_id').eq('id', order.user_id).maybeSingle()
       : Promise.resolve({ data: null })
   ]);
   return { company: company.data, user: user.data };
@@ -225,12 +227,12 @@ export async function sendOrderEditedNotice(order) {
   const text = `✏️ <b>Заказ изменён</b>
 
 ${orderText(order, ctx)}`;
-  const res = await sendMessage(group, text, { reply_markup: orderMarkup(order) });
+  const res = await sendMessage(group, text, { reply_markup: await orderMarkup(order) });
 
   const messageId = res?.result?.message_id;
   if (!messageId) return;
 
-  const { error } = await supabase
+  const { error } = await db
     .from('orders').update({ notice_message_id: messageId }).eq('id', order.id);
   if (error) console.error('[notices] could not store order message id:', error);
 }
@@ -256,12 +258,12 @@ export async function sendNewOrderNotice(order) {
   }
 
   const ctx = await orderContext(order);
-  const res = await sendMessage(group, orderText(order, ctx), { reply_markup: orderMarkup(order) });
+  const res = await sendMessage(group, orderText(order, ctx), { reply_markup: await orderMarkup(order) });
 
   const messageId = res?.result?.message_id;
   if (!messageId) return;
 
-  const { error } = await supabase
+  const { error } = await db
     .from('orders').update({ notice_message_id: messageId }).eq('id', order.id);
   if (error) console.error('[notices] could not store order message id:', error);
 }
@@ -273,7 +275,7 @@ export async function announceOrderDecision(order) {
 
   if (adminGroupId() && order.notice_message_id) {
     await editMessageText(adminGroupId(), order.notice_message_id,
-      orderText(order, ctx), { reply_markup: orderMarkup(order) });
+      orderText(order, ctx), { reply_markup: await orderMarkup(order) });
   }
 
   const word = order.status === 'confirmed' ? 'подтверждён' : 'отклонён';
@@ -289,7 +291,7 @@ export async function announceOrderDecision(order) {
   if (ctx.user?.chat_id) targets.add(String(ctx.user.chat_id));
 
   if (await notifyOwnerEnabled()) {
-    const { data: owner } = await supabase
+    const { data: owner } = await db
       .from('users').select('chat_id')
       .eq('company_id', order.company_id).eq('role', 'owner').maybeSingle();
     // a Set keyed by chat id means the owner who placed the order is not
@@ -301,7 +303,7 @@ export async function announceOrderDecision(order) {
 }
 
 async function notifyOwnerEnabled() {
-  const { data } = await supabase
+  const { data } = await db
     .from('app_settings').select('value').eq('key', 'notifications').maybeSingle();
   // default on: the owner is the one accountable for the company's spend
   return data?.value?.notify_owner !== false;

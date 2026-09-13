@@ -1,12 +1,17 @@
 import { Router } from 'express';
-import { supabase, dbError } from '../lib/supabase.js';
+import { db, dbError } from '../lib/db.js';
 import { requireAdmin } from '../lib/auth.js';
 import { refreshUserNotice, announceOrderDecision } from '../lib/notices.js';
 import { pushOrder, FRONTPAD_DEFAULTS, frontpadConfigured, testConnection, recentLog }
   from '../lib/frontpad.js';
-import { sendMessage, notifyAdmins, kitchenGroupId, botConfigured, esc as tgEsc } from '../lib/telegram.js';
+import { sendMessage, notifyAdmins, kitchenGroupId, botConfigured, setWebhook, esc as tgEsc }
+  from '../lib/telegram.js';
 import { uploadImage, removeImage, signedUrl, MAX_BYTES, extFor } from '../lib/storage.js';
-import { ORDER_DEFAULTS, parseTime, localDate } from '../lib/orders.js';
+import { ORDER_DEFAULTS, parseTime } from '../lib/orders.js';
+import { summarise, kitchenText, confirmedOrderIds, useMaterialCost, roundQty } from '../lib/kitchen.js';
+import { normaliseUrl, forgetPublicUrl } from '../lib/publicUrl.js';
+import { importFromSupabase, supabaseConfigured, IMPORT_FLAG } from '../lib/supabaseImport.js';
+import { listBackups, createBackup, restoreBackup } from '../lib/backups.js';
 import { resolveAudience, normaliseAudience, deliver, recall, MAX_TEXT }
   from '../lib/broadcasts.js';
 import { validate as validateReminder } from '../lib/reminders.js';
@@ -20,7 +25,7 @@ adminRouter.use(requireAdmin);
 
 adminRouter.get('/users', async (req, res) => {
   const q = String(req.query.q || '').trim();
-  let query = supabase.from('users')
+  let query = db.from('users')
     .select('*, companies(company_name)')
     .order('id', { ascending: false });
   if (q) query = query.ilike('user_name', `%${q}%`);
@@ -42,7 +47,7 @@ adminRouter.post('/users', async (req, res) => {
   if (body.role === 'admin' && !body.company_id) {
     return res.status(400).json({ error: 'Администратору нужна компания — её код он вводит при входе' });
   }
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('users').insert(await stampCodeVersion(body)).select().single();
   if (error) return userError(res, error);
   res.status(201).json(data);
@@ -67,7 +72,7 @@ adminRouter.patch('/users/:id', async (req, res) => {
      a hand-typed one may never have done. */
   let rebind = null;
   if ('chat_id' in patch) {
-    const { data: before } = await supabase
+    const { data: before } = await db
       .from('users').select('user_name, chat_id, last_login').eq('id', req.params.id).maybeSingle();
 
     const established = before?.chat_id != null && before?.last_login != null;
@@ -93,7 +98,7 @@ adminRouter.patch('/users/:id', async (req, res) => {
   if (demoted && await isLastAdmin(req.params.id)) {
     return res.status(409).json({ error: 'Нельзя снять права у последнего администратора' });
   }
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('users').update(await stampCodeVersion(patch)).eq('id', req.params.id).select().single();
   if (error) return userError(res, error);
 
@@ -121,10 +126,10 @@ adminRouter.delete('/users/:id', async (req, res) => {
   if (await isLastAdmin(req.params.id)) {
     return res.status(409).json({ error: 'Нельзя удалить последнего администратора' });
   }
-  const { data: gone } = await supabase
+  const { data: gone } = await db
     .from('users').select('*').eq('id', req.params.id).maybeSingle();
 
-  const { error } = await supabase.from('users').delete().eq('id', req.params.id);
+  const { error } = await db.from('users').delete().eq('id', req.params.id);
   if (error) return dbError(res, error);
 
   if (gone) refreshUserNotice(gone, { deleted: true }).catch((e) => console.error('[notices]', e));
@@ -136,7 +141,7 @@ adminRouter.get('/new-code', (req, res) => res.json({ code: randomCode(6) }));
 /* ---------- categories ---------- */
 
 adminRouter.get('/categories', async (req, res) => {
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('categories').select('*').order('category_name', { ascending: true });
   if (error) return dbError(res, error, 500);
   res.json(data);
@@ -145,7 +150,7 @@ adminRouter.get('/categories', async (req, res) => {
 adminRouter.post('/categories', async (req, res) => {
   const name = String(req.body?.category_name || '').trim();
   if (!name) return res.status(400).json({ error: 'Название обязательно' });
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('categories')
     .insert({ category_name: name, image_path: req.body?.image_path?.trim() || null })
     .select().single();
@@ -157,13 +162,13 @@ adminRouter.patch('/categories/:id', async (req, res) => {
   const name = String(req.body?.category_name || '').trim();
   if (!name) return res.status(400).json({ error: 'Название обязательно' });
 
-  const { data: before } = await supabase
+  const { data: before } = await db
     .from('categories').select('category_name, image_path').eq('id', req.params.id).maybeSingle();
 
   const patch = { category_name: name, updated_at: new Date().toISOString() };
   if ('image_path' in req.body) patch.image_path = req.body.image_path?.trim() || null;
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('categories').update(patch).eq('id', req.params.id).select().single();
   if (error) return dbError(res, error);
 
@@ -174,23 +179,23 @@ adminRouter.patch('/categories/:id', async (req, res) => {
 
   // items.item_category stores the NAME, so a rename has to follow through
   if (before?.category_name && before.category_name !== name) {
-    await supabase.from('items')
+    await db.from('items')
       .update({ item_category: name }).eq('item_category', before.category_name);
   }
   res.json(data);
 });
 
 adminRouter.delete('/categories/:id', async (req, res) => {
-  const { data: cat } = await supabase
+  const { data: cat } = await db
     .from('categories').select('category_name, image_path').eq('id', req.params.id).maybeSingle();
   if (cat?.image_path) removeImage(cat.image_path);
 
-  const { error } = await supabase.from('categories').delete().eq('id', req.params.id);
+  const { error } = await db.from('categories').delete().eq('id', req.params.id);
   if (error) return dbError(res, error);
 
   // orphan the items rather than delete them - they stay sellable, just uncategorised
   if (cat?.category_name) {
-    await supabase.from('items')
+    await db.from('items')
       .update({ item_category: null }).eq('item_category', cat.category_name);
   }
   res.json({ ok: true });
@@ -199,7 +204,7 @@ adminRouter.delete('/categories/:id', async (req, res) => {
 /* ---------- materials ---------- */
 
 adminRouter.get('/materials', async (req, res) => {
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('materials').select('*').order('material_name', { ascending: true });
   if (error) return dbError(res, error, 500);
   res.json(data);
@@ -208,41 +213,41 @@ adminRouter.get('/materials', async (req, res) => {
 adminRouter.post('/materials', async (req, res) => {
   const body = pickMaterial(req.body);
   if (!body.material_name) return res.status(400).json({ error: 'Название обязательно' });
-  const { data, error } = await supabase.from('materials').insert(body).select().single();
+  const { data, error } = await db.from('materials').insert(body).select().single();
   if (error) return dbError(res, error);
   res.status(201).json(data);
 });
 
 adminRouter.patch('/materials/:id', async (req, res) => {
   const patch = { ...pickMaterial(req.body), updated_at: new Date().toISOString() };
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('materials').update(patch).eq('id', req.params.id).select().single();
   if (error) return dbError(res, error);
 
   // items embed a snapshot of the material name, so keep those in step
   if (patch.material_name) {
-    const { data: items } = await supabase.from('items').select('id, materials');
+    const { data: items } = await db.from('items').select('id, materials');
     for (const it of items || []) {
       const list = Array.isArray(it.materials) ? it.materials : [];
       if (!list.some((m) => String(m.id) === String(req.params.id))) continue;
       const next = list.map((m) =>
         String(m.id) === String(req.params.id) ? { ...m, name: patch.material_name } : m);
-      await supabase.from('items').update({ materials: next }).eq('id', it.id);
+      await db.from('items').update({ materials: next }).eq('id', it.id);
     }
   }
   res.json(data);
 });
 
 adminRouter.delete('/materials/:id', async (req, res) => {
-  const { error } = await supabase.from('materials').delete().eq('id', req.params.id);
+  const { error } = await db.from('materials').delete().eq('id', req.params.id);
   if (error) return dbError(res, error);
 
-  const { data: items } = await supabase.from('items').select('id, materials');
+  const { data: items } = await db.from('items').select('id, materials');
   for (const it of items || []) {
     const list = Array.isArray(it.materials) ? it.materials : [];
     const next = list.filter((m) => String(m.id) !== String(req.params.id));
     if (next.length !== list.length) {
-      await supabase.from('items').update({ materials: next }).eq('id', it.id);
+      await db.from('items').update({ materials: next }).eq('id', it.id);
     }
   }
   res.json({ ok: true });
@@ -251,7 +256,7 @@ adminRouter.delete('/materials/:id', async (req, res) => {
 /* ---------- items ---------- */
 
 adminRouter.get('/items', async (req, res) => {
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('items').select('*').order('id', { ascending: false });
   if (error) return dbError(res, error, 500);
   res.json(data);
@@ -260,7 +265,7 @@ adminRouter.get('/items', async (req, res) => {
 adminRouter.post('/items', async (req, res) => {
   const body = pickItem(req.body);
   if (!body.item_name) return res.status(400).json({ error: 'Название обязательно' });
-  const { data, error } = await supabase.from('items').insert(body).select().single();
+  const { data, error } = await db.from('items').insert(body).select().single();
   if (error) return itemError(res, error);
   res.status(201).json(data);
 });
@@ -268,10 +273,10 @@ adminRouter.post('/items', async (req, res) => {
 adminRouter.patch('/items/:id', async (req, res) => {
   const patch = { ...pickItem(req.body), updated_at: new Date().toISOString() };
 
-  const { data: before } = await supabase
+  const { data: before } = await db
     .from('items').select('image_path').eq('id', req.params.id).maybeSingle();
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('items').update(patch).eq('id', req.params.id).select().single();
   if (error) return itemError(res, error);
 
@@ -282,10 +287,10 @@ adminRouter.patch('/items/:id', async (req, res) => {
 });
 
 adminRouter.delete('/items/:id', async (req, res) => {
-  const { data: before } = await supabase
+  const { data: before } = await db
     .from('items').select('image_path').eq('id', req.params.id).maybeSingle();
 
-  const { error } = await supabase.from('items').delete().eq('id', req.params.id);
+  const { error } = await db.from('items').delete().eq('id', req.params.id);
   if (error) return dbError(res, error);
 
   if (before?.image_path) removeImage(before.image_path);
@@ -295,7 +300,7 @@ adminRouter.delete('/items/:id', async (req, res) => {
 /* ---------- companies ---------- */
 
 adminRouter.get('/companies', async (req, res) => {
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('companies').select('*').order('id', { ascending: false });
   if (error) return dbError(res, error, 500);
   res.json(data);
@@ -311,14 +316,14 @@ adminRouter.post('/companies', async (req, res) => {
     return res.status(400).json({ error: 'Код: латиница, цифры и дефис, до 32 символов' });
   }
   if (!body.company_code) body.company_code = randomCode(6);
-  const { data, error } = await supabase.from('companies').insert(body).select().single();
+  const { data, error } = await db.from('companies').insert(body).select().single();
   if (error) return dbError(res, error);
   res.status(201).json(data);
 });
 
 adminRouter.patch('/companies/:id', async (req, res) => {
   const patch = { ...pickCompany(req.body), updated_at: new Date().toISOString() };
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('companies').update(patch).eq('id', req.params.id).select().single();
   if (error) return dbError(res, error);
   res.json(data);
@@ -336,7 +341,7 @@ adminRouter.put('/companies/:id/owner', async (req, res) => {
   }
 
   if (userId !== null) {
-    const { data: user, error } = await supabase
+    const { data: user, error } = await db
       .from('users').select('id, company_id, role').eq('id', userId).maybeSingle();
     if (error) return dbError(res, error, 500);
     if (!user || String(user.company_id) !== companyId) {
@@ -347,7 +352,7 @@ adminRouter.put('/companies/:id/owner', async (req, res) => {
     }
   }
 
-  let demote = supabase.from('users')
+  let demote = db.from('users')
     .update({ role: 'employee' })
     .eq('company_id', companyId).eq('role', 'owner');
   if (userId !== null) demote = demote.neq('id', userId);
@@ -355,7 +360,7 @@ adminRouter.put('/companies/:id/owner', async (req, res) => {
   if (dErr) return dbError(res, dErr);
 
   if (userId !== null) {
-    const { error: oErr } = await supabase.from('users').update({ role: 'owner' }).eq('id', userId);
+    const { error: oErr } = await db.from('users').update({ role: 'owner' }).eq('id', userId);
     if (oErr) return dbError(res, oErr);
   }
   res.json({ ok: true, owner_id: userId });
@@ -377,7 +382,7 @@ adminRouter.post('/companies/:id/rotate-code', async (req, res) => {
 
 adminRouter.delete('/companies/:id', async (req, res) => {
   // users and orders keep their rows; the FKs null out the link
-  const { error } = await supabase.from('companies').delete().eq('id', req.params.id);
+  const { error } = await db.from('companies').delete().eq('id', req.params.id);
   if (error) return dbError(res, error);
   res.json({ ok: true });
 });
@@ -388,7 +393,7 @@ adminRouter.delete('/companies/:id', async (req, res) => {
    narrowed in the browser so those controls never wait on a request. */
 adminRouter.get('/orders', async (req, res) => {
   const { from, to } = req.query;
-  let q = supabase
+  let q = db
     .from('orders')
     .select('*, companies(company_name), users(user_name)')
     .order('created_at', { ascending: false })
@@ -409,7 +414,7 @@ adminRouter.get('/stats', async (req, res) => {
   const PAGE = 1000;
   const out = [];
   for (let at = 0; ; at += PAGE) {
-    let q = supabase
+    let q = db
       .from('orders')
       .select('id, kind, status, total, items, company_id, user_id, created_at')
       .order('id', { ascending: true })
@@ -433,7 +438,7 @@ adminRouter.post('/orders/:id/decide', async (req, res) => {
     return res.status(400).json({ error: 'Неверный статус' });
   }
 
-  const { data: current, error: findErr } = await supabase
+  const { data: current, error: findErr } = await db
     .from('orders').select('*').eq('id', req.params.id).maybeSingle();
   if (findErr) return dbError(res, findErr, 500);
   if (!current) return res.status(404).json({ error: 'Заказ не найден' });
@@ -450,7 +455,7 @@ adminRouter.post('/orders/:id/decide', async (req, res) => {
   }
 
   // .eq('status', 'new') so a second click racing this one cannot decide twice
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('orders')
     .update({ status, decided_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq('id', req.params.id)
@@ -466,7 +471,7 @@ adminRouter.post('/orders/:id/decide', async (req, res) => {
 /* Resend a confirmed order — for one confirmed while the integration was off
    or in simulation, or one whose send failed. A 'sent' order is refused. */
 adminRouter.post('/orders/:id/frontpad', async (req, res) => {
-  const { data: order, error } = await supabase
+  const { data: order, error } = await db
     .from('orders').select('*').eq('id', req.params.id).maybeSingle();
   if (error) return dbError(res, error, 500);
   if (!order) return res.status(404).json({ error: 'Заказ не найден' });
@@ -497,71 +502,8 @@ adminRouter.get('/frontpad/log', async (req, res) => {
   }
 });
 
-/* A material is counted in pieces or weighed in kg; see materials.unit. */
-const UNIT_LABEL = { pcs: 'шт.', kg: 'кг' };
-const roundQty = (n) => Math.round(n * 1000) / 1000;
-const fmtQty = (n) => (Number(n) || 0).toLocaleString('ru-RU', { maximumFractionDigits: 3 });
-
-/* What the kitchen has to make for a set of orders: the items, and the
-   materials those items consume. Returns are excluded — nothing is prepared
-   for goods coming back. Materials live only here and in the panel; the
-   mini-app never sees them. */
-async function summarise(ids) {
-  const { data: orders, error } = await supabase
-    .from('orders').select('id, kind, items, total').in('id', ids);
-  if (error) throw error;
-
-  const prep = (orders || []).filter((o) => o.kind === 'order');
-
-  // item id -> units to make
-  const itemQty = new Map();
-  for (const o of prep) {
-    for (const line of Array.isArray(o.items) ? o.items : []) {
-      const id = Number(line.id);
-      if (!Number.isFinite(id)) continue;
-      itemQty.set(id, (itemQty.get(id) || 0) + (Number(line.qty) || 0));
-    }
-  }
-
-  const { data: catalog, error: cErr } = await supabase
-    .from('items').select('id, item_name, materials').in('id', [...itemQty.keys()]);
-  if (cErr) throw cErr;
-
-  const byId = new Map((catalog || []).map((i) => [i.id, i]));
-  const { data: allMaterials } = await supabase.from('materials').select('id, material_name, cost, unit');
-  const matById = new Map((allMaterials || []).map((m) => [m.id, m]));
-
-  const items = [];
-  const materials = new Map();   // material id -> { name, qty, cost, unit }
-
-  for (const [id, qty] of itemQty) {
-    const item = byId.get(id);
-    items.push({ id, name: item?.item_name || `#${id}`, qty });
-
-    for (const m of Array.isArray(item?.materials) ? item.materials : []) {
-      const meta = matById.get(Number(m.id));
-      const need = (Number(m.qty) || 1) * qty;
-      const cur = materials.get(m.id) ||
-        { id: m.id, name: meta?.material_name || m.name || `#${m.id}`, qty: 0,
-          cost: meta?.cost ?? 0, unit: meta?.unit === 'kg' ? 'kg' : 'pcs' };
-      cur.qty += need;
-      materials.set(m.id, cur);
-    }
-  }
-
-  // weights add up in float, so both the amount and the money are settled
-  // here, once, rather than in every place that prints them
-  const list = [...materials.values()]
-    .map((m) => ({ ...m, qty: roundQty(m.qty), total: Math.round(m.qty * (m.cost || 0)) }))
-    .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-
-  return {
-    order_count: prep.length,
-    items: items.sort((a, b) => a.name.localeCompare(b.name, 'ru')),
-    materials: list,
-    materials_total: list.reduce((a, m) => a + m.total, 0)
-  };
-}
+/* The prep list itself (summarise, kitchenText) lives in lib/kitchen.js, so
+   the scheduled kitchen reminder sends exactly what these buttons send. */
 
 adminRouter.post('/orders/summary', async (req, res) => {
   const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter(Number.isFinite);
@@ -572,29 +514,6 @@ adminRouter.post('/orders/summary', async (req, res) => {
     return dbError(res, e, 500);
   }
 });
-
-/* The prep list as the kitchen group reads it. The «На кухню» button and a
-   kitchen reminder both send this; supabase/functions/cron-tick builds the
-   same text for the scheduled one — keep the two in step. */
-function kitchenText(summary) {
-  const when = new Date().toLocaleString('ru-RU', {
-    timeZone: 'Europe/Chisinau', dateStyle: 'short', timeStyle: 'short'
-  });
-
-  return [
-    '<b>Список на приготовление</b>',
-    `Заказов: ${summary.order_count}`,
-    '',
-    '<b>Позиции</b>',
-    ...summary.items.map((i) => `• ${tgEsc(i.name)} — ${i.qty} шт.`),
-    '',
-    '<b>Сырьё</b>',
-    ...summary.materials.map((m) => `• ${tgEsc(m.name)} — ${fmtQty(m.qty)} ${UNIT_LABEL[m.unit] || 'шт.'}`),
-    '',
-    `Себестоимость сырья: <b>${summary.materials_total} ₽</b>`,
-    `<i>отправлено ${when}</i>`
-  ].join('\n');
-}
 
 /* Post the prep list to the kitchen group. */
 adminRouter.post('/orders/send-kitchen', async (req, res) => {
@@ -616,7 +535,7 @@ adminRouter.post('/orders/send-kitchen', async (req, res) => {
     return res.status(400).json({ error: 'В выборке нет заказов на приготовление' });
   }
 
-  const sent = await sendMessage(group, kitchenText(summary));
+  const sent = await sendMessage(group, kitchenText(summary, { cost: await useMaterialCost() }));
   if (!sent?.ok) return res.status(502).json({ error: 'Telegram не принял сообщение' });
   res.json({ ok: true, ...summary });
 });
@@ -661,7 +580,7 @@ adminRouter.delete('/images', async (req, res) => {
    also the bulk of the data, so the list carries only the counters and the
    detail endpoint fetches the rest. */
 adminRouter.get('/broadcasts', async (req, res) => {
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('broadcasts')
     .select('id, created_at, sent_by_name, text, image_path, audience, status, ' +
             'recipients, delivered, failed, finished_at, deleted_at')
@@ -673,8 +592,8 @@ adminRouter.get('/broadcasts', async (req, res) => {
 
 adminRouter.get('/broadcasts/:id', async (req, res) => {
   const [{ data: broadcast, error: bErr }, { data: targets, error: tErr }] = await Promise.all([
-    supabase.from('broadcasts').select('*').eq('id', req.params.id).maybeSingle(),
-    supabase.from('broadcast_targets')
+    db.from('broadcasts').select('*').eq('id', req.params.id).maybeSingle(),
+    db.from('broadcast_targets')
       .select('id, user_id, user_name, company_id, chat_id, message_id, status, error, deleted_at')
       .eq('broadcast_id', req.params.id)
       .order('id')
@@ -726,7 +645,7 @@ adminRouter.post('/broadcasts', async (req, res) => {
     return res.status(400).json({ error: 'В выборке нет пользователей с Telegram' });
   }
 
-  const { data: broadcast, error } = await supabase.from('broadcasts').insert({
+  const { data: broadcast, error } = await db.from('broadcasts').insert({
     sent_by: req.admin.id,
     sent_by_name: req.admin.name || null,
     text: text || null,
@@ -739,7 +658,7 @@ adminRouter.post('/broadcasts', async (req, res) => {
 
   // The name and company are copied onto the target row: history has to keep
   // reading correctly after a user is renamed, moved, or deleted.
-  const { error: tErr } = await supabase.from('broadcast_targets').insert(
+  const { error: tErr } = await db.from('broadcast_targets').insert(
     recipients.map((u) => ({
       broadcast_id: broadcast.id,
       user_id: u.id,
@@ -758,7 +677,7 @@ adminRouter.post('/broadcasts', async (req, res) => {
 /* Recall: delete every delivered copy from the users' chats. The history row
    stays — what was sent, and to whom, is a record. */
 adminRouter.post('/broadcasts/:id/recall', async (req, res) => {
-  const { data: broadcast } = await supabase
+  const { data: broadcast } = await db
     .from('broadcasts').select('id, status').eq('id', req.params.id).maybeSingle();
   if (!broadcast) return res.status(404).json({ error: 'Рассылка не найдена' });
   if (broadcast.status === 'sending') {
@@ -776,7 +695,7 @@ adminRouter.post('/broadcasts/:id/recall', async (req, res) => {
 /* Drops the record itself, once the messages are out of the chats. The
    picture goes with it — nothing else points at it. */
 adminRouter.delete('/broadcasts/:id', async (req, res) => {
-  const { data: broadcast } = await supabase
+  const { data: broadcast } = await db
     .from('broadcasts').select('id, status, image_path').eq('id', req.params.id).maybeSingle();
   if (!broadcast) return res.status(404).json({ error: 'Рассылка не найдена' });
   if (broadcast.status === 'sending') {
@@ -784,7 +703,7 @@ adminRouter.delete('/broadcasts/:id', async (req, res) => {
   }
 
   // targets go with it through the cascade
-  const { error } = await supabase.from('broadcasts').delete().eq('id', broadcast.id);
+  const { error } = await db.from('broadcasts').delete().eq('id', broadcast.id);
   if (error) return dbError(res, error);
   if (broadcast.image_path) await removeImage(broadcast.image_path);
   res.json({ ok: true });
@@ -794,10 +713,10 @@ adminRouter.delete('/broadcasts/:id', async (req, res) => {
 
 /* Recurring messages on a weekly timetable. The panel shows the schedule in
    the admin's own words — days, a time, who — and nothing here or on screen
-   ever says "cron"; db/cron_setup.sql holds the machinery that ticks. */
+   ever says "cron"; lib/scheduler.js holds the machinery that ticks. */
 
 adminRouter.get('/reminders', async (req, res) => {
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('reminders').select('*').order('id');
   if (error) return dbError(res, error, 500);
   res.json(data || []);
@@ -807,7 +726,7 @@ adminRouter.post('/reminders', async (req, res) => {
   const { value, error: invalid } = validateReminder(req.body);
   if (invalid) return res.status(400).json({ error: invalid });
 
-  const { data, error } = await supabase.from('reminders').insert({
+  const { data, error } = await db.from('reminders').insert({
     ...value,
     enabled: 'enabled' in req.body ? !!req.body.enabled : true
   }).select().single();
@@ -819,7 +738,7 @@ adminRouter.patch('/reminders/:id', async (req, res) => {
   const { value, error: invalid } = validateReminder(req.body, { partial: true });
   if (invalid) return res.status(400).json({ error: invalid });
 
-  const { data, error } = await supabase.from('reminders')
+  const { data, error } = await db.from('reminders')
     .update({ ...value, updated_at: new Date().toISOString() })
     .eq('id', req.params.id).select().maybeSingle();
   if (error) return dbError(res, error);
@@ -828,7 +747,7 @@ adminRouter.patch('/reminders/:id', async (req, res) => {
 });
 
 adminRouter.delete('/reminders/:id', async (req, res) => {
-  const { error } = await supabase.from('reminders').delete().eq('id', req.params.id);
+  const { error } = await db.from('reminders').delete().eq('id', req.params.id);
   if (error) return dbError(res, error);
   res.json({ ok: true });
 });
@@ -837,7 +756,7 @@ adminRouter.delete('/reminders/:id', async (req, res) => {
    admin looks to answer "did it go out, and if not, why" — and it is the same
    table the tick reads to decide whether a failed send still needs doing. */
 adminRouter.get('/reminder-runs', async (req, res) => {
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('reminder_runs')
     .select('*')
     .order('started_at', { ascending: false })
@@ -854,31 +773,27 @@ adminRouter.post('/reminders/:id/test', async (req, res) => {
     return res.status(503).json({ error: 'Бот не настроен — TELEGRAM_BOT_TOKEN не задан' });
   }
 
-  const { data: reminder } = await supabase
+  const { data: reminder } = await db
     .from('reminders').select('*').eq('id', req.params.id).maybeSingle();
   if (!reminder) return res.status(404).json({ error: 'Напоминание не найдено' });
 
   // Kitchen: today's confirmed orders as a prep list, to the kitchen group only
-  // — the same selection the scheduled send in cron-tick makes.
+  // — the same selection the scheduled send in lib/reminders.js makes.
   if (reminder.audience?.mode === 'kitchen') {
     const group = kitchenGroupId();
     if (!group) return res.status(400).json({ error: 'TELEGRAM_KITCHEN_GROUP_ID не задан' });
 
-    const { data: today, error: oErr } = await supabase
-      .from('orders').select('id')
-      .eq('status', 'confirmed').eq('kind', 'order').eq('service_date', localDate());
-    if (oErr) return dbError(res, oErr, 500);
-    if (!today?.length) {
-      return res.status(400).json({ error: 'Нет подтверждённых заказов на сегодня' });
-    }
-
     let summary;
     try {
-      summary = await summarise(today.map((o) => o.id));
+      const ids = await confirmedOrderIds();
+      if (!ids.length) {
+        return res.status(400).json({ error: 'Нет подтверждённых заказов на сегодня' });
+      }
+      summary = await summarise(ids);
     } catch (e) {
       return dbError(res, e, 500);
     }
-    const sent = await sendMessage(group, kitchenText(summary));
+    const sent = await sendMessage(group, kitchenText(summary, { cost: await useMaterialCost() }));
     if (!sent?.ok) return res.status(502).json({ error: 'Telegram не принял сообщение' });
     return res.status(201).json({ ok: true, kitchen: true, orders: summary.order_count });
   }
@@ -893,7 +808,7 @@ adminRouter.post('/reminders/:id/test', async (req, res) => {
     return res.status(400).json({ error: 'В выборке нет пользователей с Telegram' });
   }
 
-  const { data: broadcast, error } = await supabase.from('broadcasts').insert({
+  const { data: broadcast, error } = await db.from('broadcasts').insert({
     sent_by: req.admin.id,
     sent_by_name: `Напоминание (вручную): ${reminder.name}`,
     text: reminder.text,
@@ -904,7 +819,7 @@ adminRouter.post('/reminders/:id/test', async (req, res) => {
   }).select().single();
   if (error) return dbError(res, error);
 
-  const { error: tErr } = await supabase.from('broadcast_targets').insert(
+  const { error: tErr } = await db.from('broadcast_targets').insert(
     recipients.map((u) => ({
       broadcast_id: broadcast.id,
       user_id: u.id,
@@ -920,6 +835,54 @@ adminRouter.post('/reminders/:id/test', async (req, res) => {
   res.status(201).json({ ok: true, recipients: recipients.length });
 });
 
+/* ---------- loading from Supabase, backups ---------- */
+
+/* Once only. The flag the load writes (app_settings 'supabase_import') is what
+   takes the button away, and this checks it too; running it again on purpose
+   is scripts/import-supabase.js. */
+adminRouter.post('/supabase-import', async (req, res) => {
+  const { data: flag, error } = await db
+    .from('app_settings').select('value').eq('key', IMPORT_FLAG).maybeSingle();
+  if (error) return dbError(res, error, 500);
+  if (flag?.value?.done_at) return res.status(409).json({ error: 'Данные из Supabase уже загружены' });
+
+  try {
+    res.json({ ok: true, ...(await importFromSupabase()) });
+  } catch (e) {
+    console.error('[import] failed:', e);
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+adminRouter.get('/backups', async (req, res) => {
+  try {
+    res.json(await listBackups());
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+adminRouter.post('/backups', async (req, res) => {
+  try {
+    res.status(201).json(await createBackup('manual'));
+  } catch (e) {
+    console.error('[backup] failed:', e);
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+/* Replaces everything, so the panel asks twice and sends confirm: true. The
+   data being replaced is saved as a backup first either way. */
+adminRouter.post('/backups/:id/restore', async (req, res) => {
+  if (req.body?.confirm !== true) return res.status(400).json({ error: 'Нужно подтверждение' });
+  try {
+    res.json({ ok: true, ...(await restoreBackup(req.params.id)) });
+  } catch (e) {
+    console.error('[backup] restore failed:', e);
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
 /* ---------- app settings ---------- */
 
 /* image_size is only read when show_images is on; it is kept across a switch
@@ -929,18 +892,46 @@ const IMAGE_SIZES = ['sm', 'md', 'lg'];
 const SETTING_DEFAULTS = {
   catalog: { group_by_category: false, show_images: false, image_size: 'md' },
   notifications: { notify_owner: true },
+  materials: { use_cost: true },
   orders: ORDER_DEFAULTS,
   frontpad: FRONTPAD_DEFAULTS,
   auth: { allow_owner_reset: false },
-  design: { background_path: null }
+  design: { background_path: null },
+  server: { public_url: '' }
 };
 
 adminRouter.get('/settings', async (req, res) => {
-  const { data, error } = await supabase.from('app_settings').select('key, value');
+  const { data, error } = await db.from('app_settings').select('key, value');
   if (error) return dbError(res, error, 500);
   const out = structuredClone(SETTING_DEFAULTS);
   for (const row of data || []) out[row.key] = { ...out[row.key], ...row.value };
+  // what the «Данные из Supabase» card needs: can it run, and has it already
+  out[IMPORT_FLAG] = { configured: supabaseConfigured(), done_at: out[IMPORT_FLAG]?.done_at || null };
   res.json(out);
+});
+
+/* The server's public address (see lib/publicUrl.js). Saving it also points
+   the bot's webhook there — that is the one thing the address is needed for
+   before anything else works — and the answer says whether Telegram agreed. */
+adminRouter.put('/settings/server', async (req, res) => {
+  const url = normaliseUrl(req.body?.public_url);
+  if (url === null) {
+    return res.status(400).json({ error: 'Адрес должен начинаться с https:// — без параметров и #' });
+  }
+
+  const value = { public_url: url };
+  const { error } = await db.from('app_settings').upsert({
+    key: 'server', value, updated_at: new Date().toISOString()
+  });
+  if (error) return dbError(res, error);
+  forgetPublicUrl();
+
+  let webhook = null;
+  if (url && botConfigured()) {
+    const r = await setWebhook(`${url}/api/telegram/webhook`, process.env.TELEGRAM_WEBHOOK_SECRET);
+    webhook = { ok: Boolean(r?.ok), description: r?.description || null };
+  }
+  res.json({ ok: true, value, webhook });
 });
 
 /* Whether a company owner may reissue their own code, or must ring a
@@ -948,7 +939,7 @@ adminRouter.get('/settings', async (req, res) => {
    is something to hand over on purpose, not to find already handed over. */
 adminRouter.put('/settings/auth', async (req, res) => {
   const value = { allow_owner_reset: !!req.body?.allow_owner_reset };
-  const { error } = await supabase.from('app_settings').upsert({
+  const { error } = await db.from('app_settings').upsert({
     key: 'auth', value, updated_at: new Date().toISOString()
   });
   if (error) return dbError(res, error);
@@ -957,8 +948,19 @@ adminRouter.put('/settings/auth', async (req, res) => {
 
 adminRouter.put('/settings/notifications', async (req, res) => {
   const value = { notify_owner: !!req.body?.notify_owner };
-  const { error } = await supabase.from('app_settings').upsert({
+  const { error } = await db.from('app_settings').upsert({
     key: 'notifications', value, updated_at: new Date().toISOString()
+  });
+  if (error) return dbError(res, error);
+  res.json({ ok: true, value });
+});
+
+/* Whether materials carry a cost at all. Off, the panel stops asking for it
+   and nothing prints it; costs already entered stay stored. */
+adminRouter.put('/settings/materials', async (req, res) => {
+  const value = { use_cost: req.body?.use_cost !== false };
+  const { error } = await db.from('app_settings').upsert({
+    key: 'materials', value, updated_at: new Date().toISOString()
   });
   if (error) return dbError(res, error);
   res.json({ ok: true, value });
@@ -968,7 +970,7 @@ adminRouter.put('/settings/notifications', async (req, res) => {
    and the daily time limit that can close the day and divert late orders. The
    mini-app reads the same row to decide what to draw; the API enforces it. */
 adminRouter.put('/settings/orders', async (req, res) => {
-  const { data: current } = await supabase
+  const { data: current } = await db
     .from('app_settings').select('value').eq('key', 'orders').maybeSingle();
   const value = { ...SETTING_DEFAULTS.orders, ...(current?.value || {}) };
 
@@ -988,27 +990,17 @@ adminRouter.put('/settings/orders', async (req, res) => {
     value.after_cutoff = req.body.after_cutoff === 'block' ? 'block' : 'next_day';
   }
 
-  const { error } = await supabase.from('app_settings').upsert({
+  const { error } = await db.from('app_settings').upsert({
     key: 'orders', value, updated_at: new Date().toISOString()
   });
   if (error) return dbError(res, error);
-
-  // The kitchen prep list goes out when the day closes, so kitchen reminders
-  // follow the time limit.
-  if ('cutoff_time' in req.body) {
-    const { error: syncErr } = await supabase.from('reminders')
-      .update({ time_of_day: value.cutoff_time, updated_at: new Date().toISOString() })
-      .eq('audience->>mode', 'kitchen');
-    if (syncErr) return dbError(res, syncErr);
-  }
-
   res.json({ ok: true, value });
 });
 
 /* Orders go to FrontPad when an admin confirms them (see src/lib/frontpad.js).
    Old keys from the batch-mode draft (mode, batch_time) are dropped here. */
 adminRouter.put('/settings/frontpad', async (req, res) => {
-  const { data: current } = await supabase
+  const { data: current } = await db
     .from('app_settings').select('value').eq('key', 'frontpad').maybeSingle();
   const value = { ...SETTING_DEFAULTS.frontpad, ...(current?.value || {}) };
   delete value.mode;
@@ -1023,7 +1015,7 @@ adminRouter.put('/settings/frontpad', async (req, res) => {
     value.delivery_time = time.text;
   }
 
-  const { error } = await supabase.from('app_settings').upsert({
+  const { error } = await db.from('app_settings').upsert({
     key: 'frontpad', value, updated_at: new Date().toISOString()
   });
   if (error) return dbError(res, error);
@@ -1033,7 +1025,7 @@ adminRouter.put('/settings/frontpad', async (req, res) => {
 /* The mini-app background: a promo or a new feature, shown behind the
    catalog. The picture it replaces is removed from the bucket. */
 adminRouter.put('/settings/design', async (req, res) => {
-  const { data: current } = await supabase
+  const { data: current } = await db
     .from('app_settings').select('value').eq('key', 'design').maybeSingle();
   const before = current?.value?.background_path || null;
   const path = String(req.body?.background_path || '').trim() || null;
@@ -1042,7 +1034,7 @@ adminRouter.put('/settings/design', async (req, res) => {
   }
 
   const value = { ...SETTING_DEFAULTS.design, ...(current?.value || {}), background_path: path };
-  const { error } = await supabase.from('app_settings').upsert({
+  const { error } = await db.from('app_settings').upsert({
     key: 'design', value, updated_at: new Date().toISOString()
   });
   if (error) return dbError(res, error);
@@ -1052,7 +1044,7 @@ adminRouter.put('/settings/design', async (req, res) => {
 
 adminRouter.put('/settings/catalog', async (req, res) => {
   // Read-modify-write: the panel saves one toggle at a time.
-  const { data: current } = await supabase
+  const { data: current } = await db
     .from('app_settings').select('value').eq('key', 'catalog').maybeSingle();
   const value = { ...SETTING_DEFAULTS.catalog, ...(current?.value || {}) };
 
@@ -1067,7 +1059,7 @@ adminRouter.put('/settings/catalog', async (req, res) => {
 
   // Grouping the app by category is only coherent if every item has one.
   if (value.group_by_category) {
-    const { data: orphans, error } = await supabase
+    const { data: orphans, error } = await db
       .from('items').select('id, item_name').is('item_category', null);
     if (error) return dbError(res, error, 500);
     if (orphans?.length) {
@@ -1078,7 +1070,7 @@ adminRouter.put('/settings/catalog', async (req, res) => {
     }
   }
 
-  const { error } = await supabase.from('app_settings').upsert({
+  const { error } = await db.from('app_settings').upsert({
     key: 'catalog', value, updated_at: new Date().toISOString()
   });
   if (error) return dbError(res, error);
@@ -1088,14 +1080,14 @@ adminRouter.put('/settings/catalog', async (req, res) => {
 /* ---------- admin UI prefs (right accessibility panel) ---------- */
 
 adminRouter.get('/prefs', async (req, res) => {
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('admin_prefs').select('prefs').eq('admin_key', String(req.admin.id)).maybeSingle();
   if (error) return dbError(res, error, 500);
   res.json(data?.prefs || {});
 });
 
 adminRouter.put('/prefs', async (req, res) => {
-  const { error } = await supabase.from('admin_prefs').upsert({
+  const { error } = await db.from('admin_prefs').upsert({
     admin_key: String(req.admin.id),
     prefs: req.body || {},
     updated_at: new Date().toISOString()
@@ -1125,7 +1117,7 @@ async function stampCodeVersion(patch) {
   if (!('company_id' in patch)) return patch;
   if (patch.company_id === null) return { ...patch, code_version: null };
 
-  const { data } = await supabase
+  const { data } = await db
     .from('companies').select('code_version').eq('id', patch.company_id).maybeSingle();
   return { ...patch, code_version: data?.code_version ?? 1 };
 }
@@ -1222,7 +1214,7 @@ function toMoney(v) {
 
 /* True when `id` is an admin with access and no other such admin exists. */
 async function isLastAdmin(id) {
-  const { data } = await supabase
+  const { data } = await db
     .from('users').select('id').eq('role', 'admin').eq('access', true);
   const admins = data || [];
   return admins.length <= 1 && admins.some((a) => String(a.id) === String(id));

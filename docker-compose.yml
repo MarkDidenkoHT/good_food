@@ -1,0 +1,55 @@
+name: goodfood
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: goodfood
+      POSTGRES_USER: goodfood
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U goodfood -d goodfood"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build: .
+    image: goodfood-app
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://goodfood:${POSTGRES_PASSWORD}@db:5432/goodfood
+      UPLOADS_DIR: /data/uploads
+      BACKUP_DIR: /data/backups
+      PORT: "3000"
+    # only this computer; the internet comes in through the tunnel below
+    ports:
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+    volumes:
+      - uploads:/data/uploads
+      - backups:/data/backups
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Optional: a Cloudflare Tunnel gives the server an https address without
+  # opening ports on the router.  docker compose --profile tunnel up -d
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - app
+
+volumes:
+  pgdata:
+  uploads:
+  backups:

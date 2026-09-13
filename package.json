@@ -5,14 +5,21 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "local": "node scripts/local.js",
+    "local:import": "node scripts/local.js scripts/import-supabase.js",
+    "local:stop": "node scripts/local.js stop"
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
-    "@supabase/supabase-js": "^2.45.0",
     "cookie-parser": "^1.4.6",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "jsonwebtoken": "^9.0.2"
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "embedded-postgres": "^18.4.0-beta.17"
   }
 }

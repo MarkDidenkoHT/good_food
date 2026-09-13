@@ -1,7 +1,8 @@
-import { supabase } from './supabase.js';
+import { db } from './db.js';
 import { localNow, parseTime } from './orders.js';
 import { resolveAudience, deliver, MAX_TEXT } from './broadcasts.js';
-import { botConfigured } from './telegram.js';
+import { botConfigured, kitchenGroupId, sendMessage } from './telegram.js';
+import { summarise, kitchenText, confirmedOrderIds, useMaterialCost } from './kitchen.js';
 
 /* Уведомления — recurring messages on a weekly timetable.
 
@@ -9,11 +10,11 @@ import { botConfigured } from './telegram.js';
    There is no cron expression anywhere in the product: the schedule is those
    fields, and this is what reads them.
 
-   The clock lives in Supabase (db/cron_setup.sql) and calls /api/cron/tick
-   every five minutes; the sending lives here, because only the server holds
-   the bot token. A fired reminder becomes an ordinary broadcast, so it
+   The clock is lib/scheduler.js, which calls runDue every five minutes; the
+   sending lives here. A fired reminder becomes an ordinary broadcast, so it
    appears in the message history with its counters and can be recalled the
-   same way as anything an admin sent by hand.
+   same way as anything an admin sent by hand — except a kitchen reminder,
+   which posts the day's prep list to the kitchen group instead.
 
    ── why there is a run log ──────────────────────────────────────────────
    Every attempt writes a row in reminder_runs, and that row is also the claim
@@ -129,14 +130,14 @@ export function isDue(reminder, now = localNow()) {
 
 /* ── the tick ──────────────────────────────────────────────────────────── */
 
-/* Called by /api/cron/tick. Returns a small report rather than logging into
+/* Called by lib/scheduler.js. Returns a small report rather than logging into
    the void — the tick's answer is the first place to look when asking whether
    the schedule is alive, and the run log is the second. */
 export async function runDue(at = new Date()) {
   const now = localNow(at);
   const report = { day: now.date, sent: [], retried: [], skipped: [], checked: 0 };
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('reminders').select('*').eq('enabled', true).order('id');
   if (error) throw error;
 
@@ -156,7 +157,7 @@ export async function runDue(at = new Date()) {
     if (run.attempts > 1) report.retried.push({ id: reminder.id, attempt: run.attempts });
 
     try {
-      const count = await fire(reminder, run);
+      const count = await fire(reminder, run, now);
       if (count) report.sent.push({ id: reminder.id, name: reminder.name, recipients: count });
       else report.skipped.push({ id: reminder.id, reason: 'нет получателей' });
     } catch (e) {
@@ -183,7 +184,7 @@ export async function runDue(at = new Date()) {
                            is conditional on the attempt count it was read
                            with, so two ticks cannot both retry the same run. */
 async function claim(reminder, now) {
-  const { data: inserted, error } = await supabase
+  const { data: inserted, error } = await db
     .from('reminder_runs')
     .upsert({
       reminder_id: reminder.id,
@@ -202,7 +203,7 @@ async function claim(reminder, now) {
   if (error && error.code !== '23505') throw error;
   if (inserted) return inserted;
 
-  const { data: existing, error: readErr } = await supabase
+  const { data: existing, error: readErr } = await db
     .from('reminder_runs')
     .select('*')
     .eq('reminder_id', reminder.id)
@@ -221,7 +222,7 @@ async function claim(reminder, now) {
     if (age < STALE_MIN) return null;
   }
 
-  const { data: taken, error: takeErr } = await supabase
+  const { data: taken, error: takeErr } = await db
     .from('reminder_runs')
     .update({
       status: 'pending',
@@ -242,7 +243,9 @@ async function claim(reminder, now) {
 /* One reminder, once. Every exit writes the outcome onto the run row: this is
    the only thing that lets the next tick tell a send that worked from one
    that did not. */
-async function fire(reminder, run) {
+async function fire(reminder, run, now) {
+  if (reminder.audience?.mode === 'kitchen') return fireKitchen(reminder, run, now);
+
   let recipients;
   try {
     recipients = await resolveAudience(reminder.audience || {});
@@ -259,7 +262,7 @@ async function fire(reminder, run) {
   }
 
   try {
-    const { data: broadcast, error } = await supabase.from('broadcasts').insert({
+    const { data: broadcast, error } = await db.from('broadcasts').insert({
       sent_by: null,
       sent_by_name: `Уведомление: ${reminder.name}`,
       text: reminder.text,
@@ -271,7 +274,7 @@ async function fire(reminder, run) {
     }).select().single();
     if (error) throw error;
 
-    const { error: tErr } = await supabase.from('broadcast_targets').insert(
+    const { error: tErr } = await db.from('broadcast_targets').insert(
       recipients.map((u) => ({
         broadcast_id: broadcast.id,
         user_id: u.id,
@@ -289,7 +292,7 @@ async function fire(reminder, run) {
       broadcast_id: broadcast.id,
       recipients: recipients.length
     });
-    await supabase.from('reminders')
+    await db.from('reminders')
       .update({ last_run_at: new Date().toISOString() }).eq('id', reminder.id);
 
     // Detached, exactly as a hand-sent broadcast is: the tick answers as soon
@@ -305,10 +308,42 @@ async function fire(reminder, run) {
   }
 }
 
+/* The kitchen gets the prep list for the day's confirmed orders — one message
+   to one group, so it goes straight out rather than through a broadcast. The
+   same selection «Отправить сейчас» makes in routes/admin.js. */
+async function fireKitchen(reminder, run, now) {
+  const skip = async (error) => {
+    await settle(run.id, { status: 'skipped', error });
+    return 0;
+  };
+
+  const group = kitchenGroupId();
+  if (!group) return skip('TELEGRAM_KITCHEN_GROUP_ID не задан');
+
+  try {
+    const ids = await confirmedOrderIds(now.date);
+    if (!ids.length) return skip('Нет подтверждённых заказов на сегодня');
+
+    const summary = await summarise(ids);
+    if (!summary.items.length) return skip('В выборке нет заказов на приготовление');
+
+    const sent = await sendMessage(group, kitchenText(summary, { cost: await useMaterialCost() }));
+    if (!sent?.ok) throw new Error(sent?.description || 'Telegram не принял сообщение');
+
+    await settle(run.id, { status: 'sent', recipients: 1, delivered: 1 });
+    await db.from('reminders')
+      .update({ last_run_at: new Date().toISOString() }).eq('id', reminder.id);
+    return 1;
+  } catch (e) {
+    await settle(run.id, { status: 'failed', error: describe(e) });
+    throw e;
+  }
+}
+
 const describe = (e) => String(e?.message || e || 'Неизвестная ошибка').slice(0, 300);
 
 async function settle(runId, patch) {
-  const { error } = await supabase.from('reminder_runs')
+  const { error } = await db.from('reminder_runs')
     .update({ ...patch, finished_at: new Date().toISOString() })
     .eq('id', runId);
   // Losing the outcome is not worth failing the send over — the worst case is
@@ -320,10 +355,10 @@ async function settle(runId, patch) {
    does, so the history answers "did it actually arrive" without a second
    lookup. */
 async function copyCounters(runId, broadcastId) {
-  const { data } = await supabase.from('broadcasts')
+  const { data } = await db.from('broadcasts')
     .select('delivered, failed').eq('id', broadcastId).maybeSingle();
   if (!data) return;
-  await supabase.from('reminder_runs')
+  await db.from('reminder_runs')
     .update({ delivered: data.delivered || 0, failed: data.failed || 0 })
     .eq('id', runId);
 }

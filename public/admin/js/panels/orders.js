@@ -387,15 +387,26 @@ async function exportMaterials() {
   if (!ids.length) return toast('В выборке нет заказов', 'err');
 
   try {
-    const s = await api.post('/api/admin/orders/summary', { ids });
+    const [s, settings] = await Promise.all([
+      api.post('/api/admin/orders/summary', { ids }),
+      api.get('/api/admin/settings').catch(() => ({}))
+    ]);
     if (!s.materials.length) return toast('Сырьё не задано у позиций', 'err');
+    // Настройки → Себестоимость сырья
+    const useCost = settings?.materials?.use_cost !== false;
 
     // a workbook splits what the CSV had to stack into one column
-    const materials = [['Сырьё', 'Количество', 'Ед.', 'Себестоимость', 'Сумма']];
-    s.materials.forEach((m) =>
-      materials.push([m.name, m.qty, m.unit === 'kg' ? 'кг' : 'шт', m.cost, m.total]));
-    materials.push([]);
-    materials.push(['Итого', '', '', '', s.materials_total]);
+    const unitOf = (m) => (m.unit === 'kg' ? 'кг' : 'шт');
+    const materials = useCost
+      ? [['Сырьё', 'Количество', 'Ед.', 'Себестоимость', 'Сумма']]
+      : [['Сырьё', 'Количество', 'Ед.']];
+    s.materials.forEach((m) => materials.push(useCost
+      ? [m.name, m.qty, unitOf(m), m.cost, m.total]
+      : [m.name, m.qty, unitOf(m)]));
+    if (useCost) {
+      materials.push([]);
+      materials.push(['Итого', '', '', '', s.materials_total]);
+    }
 
     const items = [['Позиция', 'К приготовлению']];
     s.items.forEach((i) => items.push([i.name, i.qty]));

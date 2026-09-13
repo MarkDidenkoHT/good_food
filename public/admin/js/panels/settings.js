@@ -14,6 +14,8 @@ let settings = {
   notifications: { notify_owner: true },
   auth: { allow_owner_reset: false },
   design: { background_path: null },
+  server: { public_url: '' },
+  materials: { use_cost: true },
   orders: {
     allow_edit_confirmed: false, allow_delete_new: false,
     returns_from_history: false,
@@ -26,6 +28,7 @@ let orphans = [];
 let root;
 let fpLog = null;          // { configured, rows } — loaded lazily with the card
 let fpTest = null;         // last «Проверить связь» answer
+let backups = null;        // loaded lazily with the card, newest first
 
 /* What the last draw put on screen, so the next one can tell which fields are
    genuinely new and animate only those. A redraw that changes nothing
@@ -67,6 +70,7 @@ async function load(fresh = false) {
     orphans = [];
     draw();
     loadFpLog();
+    loadBackups();
   } catch (e) {
     toast(e.message, 'err');
   }
@@ -93,10 +97,44 @@ function draw() {
   const fpSim = fp.simulation !== false;
   const fpVerbose = fp.verbose !== false;
   const fpReturns = !!fp.send_returns;
+  const publicUrl = settings.server?.public_url || '';
+  const useCost = settings.materials?.use_cost !== false;
+  const sb = settings.supabase_import || {};
 
   body.innerHTML = '';
   const card = frag(`
     <div class="card">
+      <div class="card__head"><div class="card__title">Адрес сервера</div></div>
+      <div class="card__body">
+        <div class="field" style="margin-bottom:0">
+          <label class="field__label" for="public-url">Публичный адрес</label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <input id="public-url" class="input" type="url" placeholder="https://food.example.com"
+                   value="${esc(publicUrl)}" style="flex:1 1 260px;min-width:0">
+            <button class="btn btn--sm" id="public-url-save">Сохранить</button>
+          </div>
+          <p class="hint">Адрес, по которому сервер открывается из интернета, только https.
+             При сохранении бот Telegram переключается на этот адрес. По нему же
+             открываются кнопки «Открыть в админ-панели» в группе операторов.</p>
+        </div>
+      </div>
+    </div>
+
+    ${sb.done_at ? '' : `
+    <div class="card" style="margin-top:16px">
+      <div class="card__head"><div class="card__title">Данные из Supabase</div></div>
+      <div class="card__body">
+        <div class="field" style="margin-bottom:0">
+          <span class="field__label">Перенос данных</span>
+          <button class="btn btn--sm" id="sb-import" ${sb.configured ? '' : 'disabled'}>Загрузить данные из Supabase</button>
+          <p class="hint">${sb.configured
+            ? 'Заменяет все данные здесь данными из Supabase: пользователей, компании, позиции, заказы, рассылки и картинки. В Supabase ничего не меняется. После успешной загрузки эта карточка исчезнет.'
+            : 'В .env не заданы SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY.'}</p>
+        </div>
+      </div>
+    </div>`}
+
+    <div class="card" style="margin-top:16px">
       <div class="card__head"><div class="card__title">Каталог в приложении</div></div>
       <div class="card__body">
         <div class="field" style="margin-bottom:0">
@@ -163,6 +201,22 @@ function draw() {
           </div>
           <p class="hint">Владелец компании — сотрудник с ролью «Владелец».
              Если заказ сделал он сам, сообщение придёт один раз.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card__head"><div class="card__title">Себестоимость сырья</div></div>
+      <div class="card__body">
+        <div class="field" style="margin-bottom:0">
+          <span class="field__label">Стоимость сырья</span>
+          <div class="seg" id="seg-material-cost">
+            <button data-v="on"  aria-pressed="${useCost}">Учитывать</button>
+            <button data-v="off" aria-pressed="${!useCost}">Не учитывать</button>
+          </div>
+          <p class="hint">${useCost
+            ? 'У сырья указывается стоимость, а себестоимость видна в позициях, в списке для кухни и в выгрузке сырья.'
+            : 'Стоимость сырья не вводится и нигде не показывается. Уже введённые цены сохраняются.'}</p>
         </div>
       </div>
     </div>
@@ -333,7 +387,7 @@ function draw() {
             <button data-v="on"  aria-pressed="${fpVerbose}">Включены</button>
             <button data-v="off" aria-pressed="${!fpVerbose}">Кратко</button>
           </div>
-          <p class="hint">Карта артикулов и каждая строка заказа в логах Render.
+          <p class="hint">Карта артикулов и каждая строка заказа в логах сервера.
              Журнал ниже ведётся в любом случае.</p>
         </div>` : ''}
 
@@ -352,7 +406,24 @@ function draw() {
         <button class="btn btn--ghost btn--sm" id="fp-log-refresh">Обновить</button>
       </div>
       <div id="fp-log">${fpLogHTML()}</div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card__head">
+        <div class="card__title">Резервные копии</div>
+        <div style="flex:1 1 auto"></div>
+        <button class="btn btn--sm" id="bk-create">Создать копию</button>
+      </div>
+      <div class="card__body" style="padding-bottom:0">
+        <p class="hint" style="margin:0">Каждый день в 03:00 сохраняются все данные и картинки.
+           Копии хранятся 30 дней.</p>
+      </div>
+      <div id="bk-list">${backupsHTML()}</div>
     </div>`);
+
+  const urlInput = card.querySelector('#public-url');
+  card.querySelector('#public-url-save').onclick = () => saveServer(urlInput.value);
+  urlInput.onkeydown = (e) => { if (e.key === 'Enter') saveServer(urlInput.value); };
 
   card.querySelectorAll('#seg-cutoff button').forEach((b) => {
     b.onclick = () => saveOrders({ cutoff_enabled: b.dataset.v === 'on' });
@@ -402,6 +473,10 @@ function draw() {
     b.onclick = () => saveNotify(b.dataset.v === 'both');
   });
 
+  card.querySelectorAll('#seg-material-cost button').forEach((b) => {
+    b.onclick = () => saveMaterials(b.dataset.v === 'on');
+  });
+
   card.querySelectorAll('#seg-owner-reset button').forEach((b) => {
     b.onclick = () => {
       const on = b.dataset.v === 'on';
@@ -440,6 +515,9 @@ function draw() {
 
   card.querySelector('#fp-test').onclick = runFpTest;
   card.querySelector('#fp-log-refresh').onclick = loadFpLog;
+  card.querySelector('#bk-create').onclick = createBackupNow;
+  card.querySelector('#sb-import')?.addEventListener('click', confirmImport);
+  wireBackups(card.querySelector('#bk-list'));
 
   body.append(card);
   if (orphans.length) body.querySelector('#settings-error').append(orphanBox());
@@ -497,6 +575,23 @@ async function save(grouped) {
   }
 }
 
+/* Saving the address also moves the bot's webhook to it, so the answer says
+   whether Telegram took it — a saved address the bot is not on is worth a
+   red toast, not a green one. */
+async function saveServer(raw) {
+  try {
+    const res = await api.put('/api/admin/settings/server', { public_url: raw });
+    settle('server', res.value);
+    if (res.webhook && !res.webhook.ok) {
+      toast(`Адрес сохранён, но Telegram не принял его: ${res.webhook.description || 'ошибка'}`, 'err');
+    } else {
+      toast(res.webhook ? 'Адрес сохранён, бот переключён на него' : 'Адрес сохранён');
+    }
+  } catch (e) {
+    toast(e.message, 'err');
+  }
+}
+
 async function saveOwnerReset(allow) {
   const before = settings.auth;
   settings.auth = { ...settings.auth, allow_owner_reset: allow };
@@ -507,6 +602,21 @@ async function saveOwnerReset(allow) {
     toast('Настройка сохранена');
   } catch (e) {
     settings.auth = before;
+    draw();
+    toast(e.message, 'err');
+  }
+}
+
+async function saveMaterials(useCost) {
+  const before = settings.materials;
+  settings.materials = { ...settings.materials, use_cost: useCost };
+  draw();
+  try {
+    const res = await api.put('/api/admin/settings/materials', { use_cost: useCost });
+    settle('materials', res.value);
+    toast('Настройка сохранена');
+  } catch (e) {
+    settings.materials = before;
     draw();
     toast(e.message, 'err');
   }
@@ -602,6 +712,112 @@ async function saveFrontpad(patch) {
     draw();
     toast(e.message, 'err');
   }
+}
+
+/* ── Supabase and backups ──────────────────────────────────────────── */
+
+function confirmImport() {
+  confirmDialog('Загрузить данные из Supabase',
+    'Все данные здесь будут заменены данными из Supabase. Текущие данные перед этим ' +
+    'сохранятся в резервную копию. Загрузка может занять пару минут.',
+    async () => {
+      const res = await api.post('/api/admin/supabase-import', {});
+      const r = res.rows || {};
+      toast(`Загружено: пользователей ${r.users ?? 0}, заказов ${r.orders ?? 0}, ` +
+            `картинок ${res.pictures?.copied ?? 0}`);
+      await load(true);
+    }, 'Загрузить');
+}
+
+const KIND_LABEL = {
+  daily: 'ежедневная',
+  manual: 'вручную',
+  'pre-restore': 'перед восстановлением',
+  'pre-import': 'перед загрузкой из Supabase'
+};
+
+const backupWhen = (b) =>
+  new Date(b.created_at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' });
+
+function fmtSize(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} КБ`;
+  return `${(n / 1024 / 1024).toFixed(1).replace('.', ',')} МБ`;
+}
+
+function backupsHTML() {
+  if (!backups) return '<div class="card__body hint">Загрузка…</div>';
+  if (!backups.length) return '<div class="card__body hint">Копий пока нет.</div>';
+  return `
+    <table class="table">
+      <thead><tr>
+        <th style="width:150px">Когда</th><th>Тип</th>
+        <th style="width:90px">Заказов</th><th style="width:90px">Картинок</th>
+        <th style="width:90px">Размер</th><th style="width:140px"></th>
+      </tr></thead>
+      <tbody>${backups.map((b) => `
+        <tr>
+          <td class="num">${esc(backupWhen(b))}</td>
+          <td>${esc(KIND_LABEL[b.kind] || b.kind)}</td>
+          <td class="num">${b.rows?.orders ?? '—'}</td>
+          <td class="num">${b.files ?? 0}</td>
+          <td class="num">${fmtSize(b.bytes)}</td>
+          <td><button class="btn btn--sm" data-restore="${esc(b.id)}">Восстановить</button></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+function wireBackups(el) {
+  el?.querySelectorAll('[data-restore]').forEach((btn) => {
+    btn.onclick = () => confirmRestore(backups.find((b) => b.id === btn.dataset.restore));
+  });
+}
+
+async function loadBackups() {
+  try {
+    backups = await api.get('/api/admin/backups', { fresh: true });
+  } catch (e) {
+    backups = [];
+    toast(e.message, 'err');
+  }
+  const el = root?.querySelector('#bk-list');
+  if (el) {
+    el.innerHTML = backupsHTML();
+    wireBackups(el);
+  }
+}
+
+async function createBackupNow() {
+  const btn = root?.querySelector('#bk-create');
+  if (btn) btn.disabled = true;
+  try {
+    await api.post('/api/admin/backups', {});
+    toast('Копия создана');
+    await loadBackups();
+  } catch (e) {
+    toast(e.message, 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+/* Twice, on purpose: a restore throws away everything since the copy. */
+function confirmRestore(b) {
+  if (!b) return;
+  const when = backupWhen(b);
+  confirmDialog('Восстановить копию',
+    `Все текущие данные будут заменены копией от ${when}. Продолжить?`,
+    () => {
+      confirmDialog('Вы точно уверены?',
+        `Всё, что изменилось после ${when}, пропадёт: заказы, пользователи, настройки и картинки. ` +
+        'Текущие данные перед этим сохранятся в отдельную копию.',
+        async () => {
+          await api.post(`/api/admin/backups/${encodeURIComponent(b.id)}/restore`, { confirm: true });
+          toast(`Восстановлено из копии от ${when}`);
+          await load(true);
+        }, 'Да, восстановить');
+    }, 'Продолжить');
 }
 
 /* ── FrontPad: connection test and log ─────────────────────────────── */

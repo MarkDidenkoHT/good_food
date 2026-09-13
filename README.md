@@ -1,38 +1,76 @@
 # Good Food — система заказов
 
-Express-сервер отдаёт админ-панель и мини-приложение Telegram. База — Supabase, хостинг — Render.
+Express-сервер отдаёт админ-панель и мини-приложение Telegram. Всё работает у себя: сервер и Postgres в Docker, картинки и резервные копии на диске, уведомления и копии по расписанию внутри сервера.
 
 ## Структура
 
 ```
-server.js        Express: статика, API, вебхук Telegram
-src/lib/         Supabase, авторизация, Telegram, FrontPad, заказы, уведомления
-src/routes/      auth.js, admin.js, app.js (API мини-приложения), telegram.js
-public/admin/    админ-панель
-public/app/      мини-приложение Telegram
-db/migrations/   миграции для существующей базы
+server.js                   Express: API, статика, вебхук Telegram; при старте — миграции и расписание
+src/lib/                    база, картинки, Telegram, FrontPad, заказы, уведомления, резервные копии, Supabase
+src/routes/                 auth.js, admin.js, app.js (мини-приложение), telegram.js, files.js (картинки)
+public/admin/               админ-панель
+public/app/                 мини-приложение Telegram
+db/migrations/              схема базы, применяется сама при старте
+scripts/local.js            запуск без Docker
+scripts/import-supabase.js  загрузка из Supabase из командной строки
+Dockerfile, docker-compose.yml
 ```
 
-## Запуск
+## Запуск в Docker
+
+1. Установить Docker Desktop и включить в его настройках запуск при входе в Windows — тогда сервер поднимается сам после перезагрузки.
+2. Положить в папку проекта `.env` (образец — `.env.example`). Обязательно: `POSTGRES_PASSWORD`, `JWT_SECRET`, `TELEGRAM_BOT_TOKEN`.
+3. В папке проекта:
+
+```bash
+docker compose up -d --build
+```
+
+Админка: http://localhost:3000/admin. Порт открыт только на этом компьютере.
+
+- При первом запуске сервер создаёт базу и, если в `.env` есть ключи Supabase, сам загружает оттуда все данные. Вход — ваш Chat ID и код компании-оператора, как раньше.
+- Логи: `docker compose logs -f app`
+- Остановить: `docker compose down`. Данные остаются в томах `pgdata` (база), `uploads` (картинки) и `backups` (резервные копии).
+- Обновить после замены файлов: `docker compose up -d --build`
+
+## Без Docker
+
+Нужен Node.js 20+. Postgres ставить не надо: переносная версия приходит с `npm install`, данные хранятся в `.local/`.
 
 ```bash
 npm install
-cp .env.example .env
-npm run dev
+npm run local
 ```
 
-Админка: http://localhost:3000/admin · мини-приложение: http://localhost:3000/app/
+- Админка: http://localhost:3000/admin. Настройки берутся из `.env`, первый запуск так же сам загружает данные из Supabase.
+- Остановить: Ctrl+C. Если окно закрыли, а Postgres остался работать: `npm run local:stop`.
+- Начать с нуля: удалить папку `.local`.
 
-**Render:** Web Service · Build `npm install` · Start `npm start` · Health check `/healthz`.
-Переменные окружения — в `.env.example`.
+## Данные из Supabase
 
-Вебхук бота регистрируется один раз после деплоя:
+- **Настройки → Данные из Supabase → «Загрузить данные из Supabase»** — последняя загрузка перед переходом. Все данные здесь заменяются, текущие перед этим сохраняются в резервную копию. После успешной загрузки карточка исчезает.
+- В Supabase ничего не меняется. Не переносятся `cron_settings` и `orders.locked`: код их не читает.
+- Загрузить ещё раз из командной строки: `docker compose run --rm app node scripts/import-supabase.js --replace` (без Docker: `npm run local:import -- --replace`).
+- После перехода ключи Supabase из `.env` можно удалить.
 
-```bash
-curl -F "url=https://ВАШ-СЕРВИС.onrender.com/api/telegram/webhook" \
-     -F "secret_token=ВАШ_WEBHOOK_SECRET" \
-     "https://api.telegram.org/botВАШ_ТОКЕН/setWebhook"
-```
+## Доступ из интернета
+
+Telegram работает только с https. Проще всего Cloudflare Tunnel, без проброса портов на роутере:
+
+1. Cloudflare Zero Trust → Networks → Tunnels → Create tunnel (Cloudflared). Токен — в `.env`, `CLOUDFLARE_TUNNEL_TOKEN`.
+2. В туннеле Public Hostname: свой домен → Service `http://app:3000`.
+3. `docker compose --profile tunnel up -d`
+4. Админка → **Настройки → Адрес сервера**: `https://ваш-домен` → «Сохранить». Бот сразу переключается на этот адрес.
+5. @BotFather → бот → Mini App / Menu Button: `https://ваш-домен/app/`.
+
+Пока адрес не задан, бот не получает сообщения, а в группе операторов нет кнопок «Открыть в админ-панели».
+
+## Резервные копии
+
+- Каждый день в 03:00 (по Кишинёву) сервер сохраняет все данные и картинки. Если в 03:00 он был выключен, копия делается, как только он заработает в тот же день.
+- Копии хранятся 30 дней. Самая свежая не удаляется никогда.
+- **Настройки → Резервные копии:** список, «Создать копию», «Восстановить» (с двумя подтверждениями). Перед восстановлением текущие данные тоже сохраняются в копию.
+- Где лежат: в Docker — том `backups`, без Docker — `.local/backups`. Забрать на другой диск: `docker compose cp app:/data/backups ./backups`.
 
 ## Роли и вход
 
@@ -82,7 +120,7 @@ curl -F "url=https://ВАШ-СЕРВИС.onrender.com/api/telegram/webhook" \
 |---|---|---|
 | `enabled` | выкл | отправлять ли вообще |
 | `simulation` | **вкл** | всё собирать и писать в журнал, но не отправлять |
-| `verbose` | вкл | подробный лог на Render |
+| `verbose` | вкл | подробный лог сервера |
 | `send_returns` | выкл | отправлять возвраты |
 | `delivery_time` | 10:00 | время доставки |
 
@@ -98,9 +136,9 @@ curl -F "url=https://ВАШ-СЕРВИС.onrender.com/api/telegram/webhook" \
 
 Повторяющиеся сообщения по расписанию: дни недели, время (по Кишинёву), текст, получатели.
 
-- Отправляет их функция в Supabase (Edge Function) по расписанию каждые 5 минут. Функция живёт в Supabase, в этом репозитории её нет.
+- Их отправляет сам сервер: каждые 5 минут проверяет, что пора отправить.
 - Сообщение уходит в течение 5 минут после указанного времени. Если опоздание больше часа, оно не отправляется.
-- Каждое уведомление уходит один раз в день.
+- Каждое уведомление уходит один раз в день. Неудачная отправка повторяется, до трёх попыток в течение часа.
 - Получатель **«Кухне»**: в группу кухни отправляется список на приготовление по подтверждённым заказам на сегодня. Нужен `TELEGRAM_KITCHEN_GROUP_ID`.
 - Включить или выключить уведомление можно кликом по статусу.
 - «Отправить сейчас» отправляет вручную и не влияет на расписание.

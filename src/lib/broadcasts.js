@@ -1,6 +1,6 @@
-import { supabase } from './supabase.js';
+import { db } from './db.js';
 import { sendMessage, sendPhoto, deleteMessage, esc } from './telegram.js';
-import { signedUrl } from './storage.js';
+import { readImage } from './storage.js';
 
 /* Sending a broadcast and taking it back.
 
@@ -33,7 +33,7 @@ export async function resolveAudience(audience = {}) {
   // nobody, rather than falling through to "all"
   if (audience.mode === 'kitchen') return [];
 
-  let query = supabase
+  let query = db
     .from('users')
     .select('id, user_name, chat_id, company_id')
     .not('chat_id', 'is', null)
@@ -77,7 +77,7 @@ const bodyText = (text) => (text ? esc(text) : '');
    recipient it belongs to rather than aborting the run: one blocked chat must
    not stop the other ninety-nine. */
 export async function deliver(broadcastId, text, imagePath) {
-  const { data: targets, error } = await supabase
+  const { data: targets, error } = await db
     .from('broadcast_targets')
     .select('id, chat_id')
     .eq('broadcast_id', broadcastId)
@@ -85,12 +85,12 @@ export async function deliver(broadcastId, text, imagePath) {
     .order('id');
   if (error) return console.error('[broadcast] targets unreadable:', error.message);
 
-  // One link for the whole run: Telegram fetches the picture per recipient,
-  // and an hour covers a broadcast far larger than these ever get.
-  const photo = imagePath ? await signedUrl(imagePath, 3600) : null;
+  // Read once. The first send uploads the picture and every later one reuses
+  // the file_id Telegram hands back, so it crosses the wire a single time.
+  let photo = imagePath ? await readImage(imagePath) : null;
   if (imagePath && !photo) {
     // nothing was sent, so every recipient failed for the same reason
-    await supabase.from('broadcast_targets')
+    await db.from('broadcast_targets')
       .update({ status: 'failed', error: 'Не удалось подготовить изображение' })
       .eq('broadcast_id', broadcastId).eq('status', 'pending');
     await finish(broadcastId, 0, targets.length);
@@ -109,18 +109,22 @@ export async function deliver(broadcastId, text, imagePath) {
     const messageId = res?.result?.message_id || null;
     if (messageId) {
       delivered++;
-      await supabase.from('broadcast_targets')
+      const sizes = res.result.photo;
+      if (photo && typeof photo !== 'string' && sizes?.length) {
+        photo = sizes[sizes.length - 1].file_id;
+      }
+      await db.from('broadcast_targets')
         .update({ status: 'sent', message_id: messageId, error: null })
         .eq('id', t.id);
     } else {
       failed++;
-      await supabase.from('broadcast_targets')
+      await db.from('broadcast_targets')
         .update({ status: 'failed', error: res?.description || 'Telegram не принял сообщение' })
         .eq('id', t.id);
     }
 
     // counters climb while the panel is watching, not only at the end
-    await supabase.from('broadcasts')
+    await db.from('broadcasts')
       .update({ delivered, failed }).eq('id', broadcastId);
 
     await pause(GAP_MS);
@@ -130,7 +134,7 @@ export async function deliver(broadcastId, text, imagePath) {
 }
 
 async function finish(id, delivered, failed) {
-  await supabase.from('broadcasts').update({
+  await db.from('broadcasts').update({
     status: 'sent', delivered, failed, finished_at: new Date().toISOString()
   }).eq('id', id);
 }
@@ -142,7 +146,7 @@ async function finish(id, delivered, failed) {
    or the message is beyond the window it allows — so a refusal marks that one
    recipient and the rest carry on. */
 export async function recall(broadcastId) {
-  const { data: targets, error } = await supabase
+  const { data: targets, error } = await db
     .from('broadcast_targets')
     .select('id, chat_id, message_id')
     .eq('broadcast_id', broadcastId)
@@ -158,19 +162,19 @@ export async function recall(broadcastId) {
     const res = await deleteMessage(t.chat_id, t.message_id);
     if (res?.ok) {
       removed++;
-      await supabase.from('broadcast_targets')
+      await db.from('broadcast_targets')
         .update({ status: 'deleted', deleted_at: new Date().toISOString(), error: null })
         .eq('id', t.id);
     } else {
       kept++;
-      await supabase.from('broadcast_targets')
+      await db.from('broadcast_targets')
         .update({ error: res?.description || 'Telegram не удалил сообщение' })
         .eq('id', t.id);
     }
     await pause(GAP_MS);
   }
 
-  await supabase.from('broadcasts').update({
+  await db.from('broadcasts').update({
     status: 'deleted', deleted_at: new Date().toISOString()
   }).eq('id', broadcastId);
 

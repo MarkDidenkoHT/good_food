@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { supabase, dbError } from '../lib/supabase.js';
+import { db, dbError } from '../lib/db.js';
 import { verifyInitData } from '../lib/telegram.js';
 import { sign, cookieOpts, ADMIN_COOKIE, USER_COOKIE, requireAdmin, requireUser,
          issueUserSession as issueSession } from '../lib/auth.js';
@@ -46,7 +46,7 @@ function identify(body) {
 }
 
 function loadUser(chatId) {
-  return supabase
+  return db
     .from('users')
     .select('id, user_name, access, role, chat_id, tg_username, company_id, code_version, ' +
             'companies(id, company_name, access, code_version)')
@@ -62,7 +62,7 @@ function loadUser(chatId) {
    charset is ever widened, a pattern that matched a company other than itself
    still resolves to no company at all, rather than quietly becoming a key. */
 async function loadCompany(code) {
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('companies')
     .select('id, company_name, access, code_version, company_code')
     .ilike('company_code', code)
@@ -93,7 +93,7 @@ function publicUser(user, companyName) {
 }
 
 const touch = (id) =>
-  supabase.from('users').update({ last_login: new Date().toISOString() }).eq('id', id);
+  db.from('users').update({ last_login: new Date().toISOString() }).eq('id', id);
 
 /* ---------- admin panel ---------- */
 
@@ -203,7 +203,7 @@ authRouter.post('/user/join', async (req, res) => {
   const firstJoin = !user.company_id;
   const role = firstJoin ? 'employee' : user.role;
 
-  const { data: updated, error: uErr } = await supabase
+  const { data: updated, error: uErr } = await db
     .from('users')
     .update({
       company_id: company.id,
@@ -240,7 +240,7 @@ authRouter.post('/user/logout', (req, res) => {
 });
 
 authRouter.get('/user/me', requireUser, async (req, res) => {
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('users')
     .select('id, user_name, access, role, company_id, code_version, ' +
             'companies(company_name, access, code_version)')

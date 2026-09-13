@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { supabase, dbError } from '../lib/supabase.js';
+import { db, dbError } from '../lib/db.js';
 import { requireUser, issueUserSession } from '../lib/auth.js';
 import { requireFreshCode, rotateCompanyCode } from '../lib/companyCode.js';
 import { sendNewOrderNotice, sendOrderEditedNotice, markOrderDeleted } from '../lib/notices.js';
@@ -23,7 +23,7 @@ appRouter.use(requireFreshCode);
    said so. Read on every use: withdrawing the permission has to take effect
    without waiting for anybody to reload anything. */
 async function ownerResetAllowed() {
-  const { data } = await supabase
+  const { data } = await db
     .from('app_settings').select('value').eq('key', 'auth').maybeSingle();
   return data?.value?.allow_owner_reset === true;
 }
@@ -62,14 +62,14 @@ appRouter.post('/company/rotate-code', async (req, res) => {
 
 appRouter.get('/catalog', async (req, res) => {
   const [items, categories, settings, orders, ownerReset, design] = await Promise.all([
-    supabase.from('items')
+    db.from('items')
       .select('id, item_name, item_category, item_cost, image_path, available')
       .order('item_name'),
-    supabase.from('categories').select('id, category_name, image_path').order('category_name'),
-    supabase.from('app_settings').select('key, value').eq('key', 'catalog').maybeSingle(),
+    db.from('categories').select('id, category_name, image_path').order('category_name'),
+    db.from('app_settings').select('key, value').eq('key', 'catalog').maybeSingle(),
     orderSettings(),
     ownerResetAllowed(),
-    supabase.from('app_settings').select('value').eq('key', 'design').maybeSingle()
+    db.from('app_settings').select('value').eq('key', 'design').maybeSingle()
   ]);
 
   if (items.error) return dbError(res, items.error, 500);
@@ -134,7 +134,7 @@ function orderRules(settings, now = new Date()) {
 
 appRouter.get('/orders', async (req, res) => {
   const [{ data, error }, settings] = await Promise.all([
-    supabase
+    db
       .from('orders')
       .select('id, created_at, kind, status, items, total, comment, user_id, edited_at, ' +
               'service_date, source_order_id')
@@ -252,7 +252,7 @@ appRouter.post('/orders', async (req, res) => {
     ({ lines, total } = priced);
   }
 
-  const { data: order, error: insErr } = await supabase
+  const { data: order, error: insErr } = await db
     .from('orders')
     .insert({
       company_id: req.user.company_id,
@@ -281,7 +281,7 @@ appRouter.post('/orders', async (req, res) => {
 appRouter.patch('/orders/:id', async (req, res) => {
   const settings = await orderSettings();
 
-  const { data: order, error: findErr } = await supabase
+  const { data: order, error: findErr } = await db
     .from('orders')
     .select('id, company_id, user_id, kind, status, created_at, service_date, notice_message_id')
     .eq('id', req.params.id)
@@ -320,7 +320,7 @@ appRouter.patch('/orders/:id', async (req, res) => {
     patch.comment = String(req.body.comment || '').trim().slice(0, 500) || null;
   }
 
-  const { data: updated, error } = await supabase
+  const { data: updated, error } = await db
     .from('orders')
     .update(patch)
     .eq('id', order.id)
@@ -341,7 +341,7 @@ appRouter.delete('/orders/:id', async (req, res) => {
     return res.status(403).json({ error: 'Удаление заказов отключено' });
   }
 
-  const { data: order, error: findErr } = await supabase
+  const { data: order, error: findErr } = await db
     .from('orders')
     .select('id, company_id, user_id, kind, status, created_at, service_date, items, total, comment, notice_message_id')
     .eq('id', req.params.id)
@@ -357,7 +357,7 @@ appRouter.delete('/orders/:id', async (req, res) => {
     return res.status(409).json({ error: closedMessage(order, settings) });
   }
 
-  const { error } = await supabase
+  const { error } = await db
     .from('orders').delete().eq('id', order.id).eq('status', 'new');
   if (error) return dbError(res, error);
 
