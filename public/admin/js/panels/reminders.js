@@ -294,13 +294,11 @@ function rowHTML(r) {
         <span class="pill">${esc(audienceText(r.audience))}</span>
         <div class="hint" style="margin:4px 0 0">${isKitchen(r) ? 'заказы на сегодня' : `${count} чел.`}</div>
       </td>
-      <td>${r.enabled
-        ? '<span class="pill pill--on">Включено</span>'
-        : '<span class="pill pill--off">Выключено</span>'}</td>
+      <td><button type="button" class="pill pill--btn ${r.enabled ? 'pill--on' : 'pill--off'}"
+                  data-toggle="${r.id}" title="${r.enabled ? 'Нажмите, чтобы выключить' : 'Нажмите, чтобы включить'}">
+        ${r.enabled ? 'Включено' : 'Выключено'}</button></td>
       <td class="num">${r.last_run_at ? fmtDate(r.last_run_at) : '—'}</td>
       <td><div class="row-actions">
-        <button class="btn btn--ghost btn--sm" data-toggle="${r.id}"
-                title="${r.enabled ? 'Выключить' : 'Включить'}">${r.enabled ? 'Выкл' : 'Вкл'}</button>
         <button class="btn btn--ghost btn--icon btn--sm" data-test="${r.id}"
                 title="Отправить сейчас"><span data-icon="messages"></span></button>
         <button class="btn btn--ghost btn--icon btn--sm" data-edit="${r.id}"
