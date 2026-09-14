@@ -9,8 +9,9 @@ export const telegramRouter = Router();
    logged rather than surfaced. */
 
 telegramRouter.post('/webhook', async (req, res) => {
+  // no secret configured means nothing can prove a request came from Telegram
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
-  if (secret && req.get('x-telegram-bot-api-secret-token') !== secret) {
+  if (!secret || req.get('x-telegram-bot-api-secret-token') !== secret) {
     return res.sendStatus(401);
   }
 

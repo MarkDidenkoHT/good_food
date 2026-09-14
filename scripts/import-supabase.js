@@ -3,7 +3,6 @@
  * button's once-only flag, so the button stays where it is.
  *
  *   docker compose run --rm app node scripts/import-supabase.js [--replace]
- *   npm run local:import [-- --replace]
  *
  * Refuses to replace data that is already here unless --replace is given.
  * The data it replaces is saved as a backup first (see src/lib/backups.js).

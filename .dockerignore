@@ -8,4 +8,3 @@ backups
 .git
 Dockerfile
 docker-compose.yml
-.local

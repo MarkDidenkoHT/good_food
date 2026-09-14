@@ -15,8 +15,10 @@ import { startScheduler, stopScheduler } from './src/lib/scheduler.js';
 import { importIfEmpty } from './src/lib/supabaseImport.js';
 import { ensureInitialAdmin } from './src/lib/initialAdmin.js';
 
+// without it sessions would be signed with a key anyone can read in the source
 if (!process.env.JWT_SECRET) {
-  console.warn('[server] JWT_SECRET is not set — sessions are signed with an insecure default. Is .env next to docker-compose.yml?');
+  console.error('[server] JWT_SECRET is not set — refusing to start. Is .env next to docker-compose.yml?');
+  process.exit(1);
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

@@ -37,6 +37,32 @@ export const authRouter = Router();
 
 const CHAT_RE = /^-?\d{1,20}$/;
 
+/* Password guessing. The company code is the secret in both logins, so wrong
+   attempts are counted: ten within fifteen minutes and that key is refused
+   until the window has passed. The admin panel is keyed by client address
+   (X-Forwarded-For from the proxy), the mini-app by the signed chat id. Kept
+   in memory: there is one server, and a restart forgiving everyone is fine. */
+const FAIL_LIMIT = 10;
+const FAIL_WINDOW_MS = 15 * 60 * 1000;
+const failures = new Map();
+
+function throttled(key) {
+  const f = failures.get(key);
+  if (f && Date.now() - f.since > FAIL_WINDOW_MS) failures.delete(key);
+  return (failures.get(key)?.count || 0) >= FAIL_LIMIT;
+}
+
+function recordFailure(key) {
+  const f = failures.get(key);
+  if (f) return void f.count++;
+  if (failures.size > 10_000) {
+    for (const [k, v] of failures) if (Date.now() - v.since > FAIL_WINDOW_MS) failures.delete(k);
+  }
+  failures.set(key, { count: 1, since: Date.now() });
+}
+
+const TOO_MANY = { error: 'Слишком много попыток. Попробуйте через 15 минут' };
+
 /* The signature, or nothing. Returns null when initData is absent, forged,
    expired — or when TELEGRAM_BOT_TOKEN is unset, because a server that cannot
    verify a signature must refuse logins rather than wave them through. */
@@ -103,7 +129,10 @@ authRouter.post('/admin/login', async (req, res) => {
   const code = String(req.body?.code || '').trim();
   const chatId = String(req.body?.chat_id || '').trim();
   if (!code || !chatId) return res.status(400).json({ error: 'Chat ID and code required' });
+  const limitKey = `admin:${req.ip}`;
+  if (throttled(limitKey)) return res.status(429).json(TOO_MANY);
   if (!CODE_RE.test(code) || !CHAT_RE.test(chatId)) {
+    recordFailure(limitKey);
     return res.status(401).json({ error: 'Invalid credentials' });
   }
 
@@ -117,7 +146,11 @@ authRouter.post('/admin/login', async (req, res) => {
     user.company_id === company.id &&
     user.access !== false &&
     company.access !== false;
-  if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+  if (!ok) {
+    recordFailure(limitKey);
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
+  failures.delete(limitKey);
 
   await touch(user.id);
   res.cookie(
@@ -180,7 +213,12 @@ authRouter.post('/user/join', async (req, res) => {
 
   const code = String(req.body?.code || '').trim();
   if (!code) return res.status(400).json({ error: 'Введите код компании' });
-  if (!CODE_RE.test(code)) return res.status(401).json({ error: 'Неверный код' });
+  const limitKey = `join:${chatId}`;
+  if (throttled(limitKey)) return res.status(429).json(TOO_MANY);
+  if (!CODE_RE.test(code)) {
+    recordFailure(limitKey);
+    return res.status(401).json({ error: 'Неверный код' });
+  }
 
   const { data: user, error } = await loadUser(chatId);
   if (error) return dbError(res, error, 500);
@@ -188,7 +226,11 @@ authRouter.post('/user/join', async (req, res) => {
 
   const { data: company, error: cErr } = await loadCompany(code);
   if (cErr) return dbError(res, cErr, 500);
-  if (!company) return res.status(401).json({ error: 'Неверный код' });
+  if (!company) {
+    recordFailure(limitKey);
+    return res.status(401).json({ error: 'Неверный код' });
+  }
+  failures.delete(limitKey);
   if (company.access === false) return res.status(403).json({ error: 'company_blocked' });
 
   // Already elsewhere: the code has to be their own company's.
