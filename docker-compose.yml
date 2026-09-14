@@ -7,7 +7,8 @@ services:
     environment:
       POSTGRES_DB: goodfood
       POSTGRES_USER: goodfood
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      # the database has no port outside Docker, so a default is safe enough
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-goodfood}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -21,9 +22,11 @@ services:
     image: goodfood-app
     restart: unless-stopped
     init: true
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     environment:
-      DATABASE_URL: postgres://goodfood:${POSTGRES_PASSWORD}@db:5432/goodfood
+      DATABASE_URL: postgres://goodfood:${POSTGRES_PASSWORD:-goodfood}@db:5432/goodfood
       UPLOADS_DIR: /data/uploads
       BACKUP_DIR: /data/backups
       PORT: "3000"
