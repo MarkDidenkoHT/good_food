@@ -12,6 +12,7 @@
 ## Запуск
 
 ```bash
+cd good_food            # корень репозитория, рядом с docker-compose.yml
 cp .env.example .env    # заполнить, см. «Конфигурация»
 docker compose up -d
 docker compose ps       # оба контейнера должны быть healthy
@@ -28,7 +29,7 @@ docker compose ps       # оба контейнера должны быть heal
 
 ## Конфигурация
 
-Все настройки задаются в `.env`. После изменения выполните `docker compose up -d`.
+Все настройки задаются в файле `.env` в **корне репозитория**, рядом с `docker-compose.yml`. Docker Compose читает его только оттуда. Файл не хранится в git. После изменения выполните `docker compose up -d`.
 
 | переменная | обязательна | описание |
 |---|---|---|
