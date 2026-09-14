@@ -15,6 +15,10 @@ import { startScheduler, stopScheduler } from './src/lib/scheduler.js';
 import { importIfEmpty } from './src/lib/supabaseImport.js';
 import { ensureInitialAdmin } from './src/lib/initialAdmin.js';
 
+if (!process.env.JWT_SECRET) {
+  console.warn('[server] JWT_SECRET is not set — sessions are signed with an insecure default. Is .env next to docker-compose.yml?');
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
