@@ -11,7 +11,6 @@ let materials = [];
 let tab = 'items';       // items | categories | materials
 let query = '';
 let root;
-let sendReturns = false;   // Настройки → FrontPad → Возвраты: shows the return article field
 let useCost = true;        // Настройки → Себестоимость сырья: shows material costs
 
 const money = (v) => (v === null || v === undefined ? '—' : `${v} ₽`);
@@ -70,7 +69,6 @@ async function load(fresh = false) {
     ]);
     api.get('/api/admin/settings', { fresh })
       .then((s) => {
-        sendReturns = !!(s.frontpad?.enabled && s.frontpad?.send_returns);
         const cost = s.materials?.use_cost !== false;
         if (cost !== useCost) {
           useCost = cost;
@@ -426,8 +424,8 @@ function itemForm(item) {
             <!-- the segment writes here so the modal's FormData carries it -->
             <input type="hidden" name="available" id="f-item-avail-v"
                    value="${item?.available === false ? 'off' : 'on'}">
-            <p class="hint">Снятую позицию нельзя заказать. Она остаётся в истории
-               заказов и доступна для возврата.</p>
+            <p class="hint">Снятую позицию нельзя заказать или взять на замену.
+               Она остаётся в истории заказов.</p>
           </div>
 
           <div class="field">
@@ -437,14 +435,6 @@ function itemForm(item) {
             <p class="hint">Код позиции в FrontPad. Без него заказ с этой позицией
                нельзя передать в FrontPad. Один артикул — одна позиция.</p>
           </div>
-
-          ${sendReturns ? `
-          <div class="field">
-            <label class="field__label" for="f-item-fp-ret">Артикул возврата FrontPad</label>
-            <input class="input" id="f-item-fp-ret" name="frontpad_return_id"
-                   value="${esc(item?.frontpad_return_id || '')}" placeholder="напр. 2024">
-            <p class="hint">Им передаётся возврат этой позиции.</p>
-          </div>` : ''}
 
           ${imageFieldHTML(item?.image_path)}
         </div>
@@ -493,8 +483,6 @@ function itemForm(item) {
         frontpad_id: d.frontpad_id || null,
         materials: picked
       };
-      // only sent when the field was on screen, so a hidden field never blanks it
-      if (sendReturns) payload.frontpad_return_id = d.frontpad_return_id || null;
       if (isNew) await api.post('/api/admin/items', payload);
       else await api.patch(`/api/admin/items/${item.id}`, payload);
       toast(isNew ? 'Позиция создана' : 'Сохранено');

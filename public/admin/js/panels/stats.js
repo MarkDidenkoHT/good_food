@@ -27,7 +27,7 @@ const filters = {
 };
 
 const sort = {
-  companies: { key: 'net', dir: -1 },
+  companies: { key: 'revenue', dir: -1 },
   items: { key: 'soldQty', dir: -1 }
 };
 
@@ -153,11 +153,22 @@ function drawToolbar() {
 
 /* ── aggregation ────────────────────────────────────────────── */
 
+/* Two ways of counting the same deliveries:
+     чистая  — what was charged: orders only, exactly what went to FrontPad;
+     грязная — what was made and delivered: orders plus replacements.
+   A replacement is valued at the price on its lines. What staff wrote off
+   plus чистая comes to грязная, which is how the two are checked against
+   each other. Old return documents belong to neither and are left out. */
 function counted() {
   return orders.filter((o) =>
-    filters.status === 'all' ||
-    (filters.status === 'confirmed' ? o.status === 'confirmed' : o.status !== 'rejected'));
+    (o.kind === 'order' || o.kind === 'replacement') &&
+    (filters.status === 'all' ||
+      (filters.status === 'confirmed' ? o.status === 'confirmed' : o.status !== 'rejected')));
 }
+
+const linesOf = (o) => (Array.isArray(o.items) ? o.items : []);
+const qtyOf = (o) => linesOf(o).reduce((a, l) => a + (Number(l.qty) || 0), 0);
+const valueOf = (o) => linesOf(o).reduce((a, l) => a + (Number(l.qty) || 0) * (Number(l.cost) || 0), 0);
 
 function companyRows(list) {
   const names = new Map(companies.map((c) => [c.id, c.company_name]));
@@ -168,28 +179,29 @@ function companyRows(list) {
     if (!r) {
       r = {
         name: o.company_id == null ? 'Без компании' : names.get(o.company_id) || `#${o.company_id}`,
-        orders: 0, revenue: 0, returns: 0, returned: 0, last: null, users: new Set()
+        orders: 0, revenue: 0, replacedQty: 0, replaced: 0, last: null, users: new Set()
       };
       by.set(key, r);
     }
-    const sum = Number(o.total) || 0;
-    if (o.kind === 'return') { r.returns++; r.returned += sum; }
-    else {
+    if (o.kind === 'replacement') {
+      r.replacedQty += qtyOf(o);
+      r.replaced += valueOf(o);
+    } else {
       r.orders++;
-      r.revenue += sum;
+      r.revenue += Number(o.total) || 0;
       if (!r.last || o.created_at > r.last) r.last = o.created_at;
     }
     if (o.user_id != null) r.users.add(o.user_id);
   }
 
   const rows = [...by.values()];
-  const totalNet = rows.reduce((a, r) => a + r.revenue - r.returned, 0);
+  const totalRevenue = rows.reduce((a, r) => a + r.revenue, 0);
   return rows.map((r) => ({
     ...r,
     users: r.users.size,
-    net: r.revenue - r.returned,
+    gross: r.revenue + r.replaced,
     avg: r.orders ? r.revenue / r.orders : 0,
-    share: totalNet > 0 ? (r.revenue - r.returned) / totalNet : 0
+    share: totalRevenue > 0 ? r.revenue / totalRevenue : 0
   }));
 }
 
@@ -197,8 +209,7 @@ function itemRows(list) {
   const byId = new Map(items.map((i) => [i.id, i]));
   const by = new Map();
   for (const o of list) {
-    const lines = Array.isArray(o.items) ? o.items : [];
-    for (const l of lines) {
+    for (const l of linesOf(o)) {
       const key = l.id ?? `name:${l.name}`;
       let r = by.get(key);
       if (!r) {
@@ -206,28 +217,31 @@ function itemRows(list) {
         r = {
           name: it?.item_name || l.name || '—',
           category: it?.item_category || '',
-          soldQty: 0, revenue: 0, returnedQty: 0, returned: 0,
+          soldQty: 0, revenue: 0, replacedQty: 0, replaced: 0,
           orders: new Set(), companies: new Set()
         };
         by.set(key, r);
       }
       const qty = Number(l.qty) || 0;
       const sum = qty * (Number(l.cost) || 0);
-      if (o.kind === 'return') { r.returnedQty += qty; r.returned += sum; }
-      else {
+      if (o.kind === 'replacement') {
+        r.replacedQty += qty;
+        r.replaced += sum;
+      } else {
         r.soldQty += qty;
         r.revenue += sum;
         r.orders.add(o.id);
-        if (o.company_id != null) r.companies.add(o.company_id);
       }
+      if (o.company_id != null) r.companies.add(o.company_id);
     }
   }
   return [...by.values()].map((r) => ({
     ...r,
     orders: r.orders.size,
     companies: r.companies.size,
-    net: r.revenue - r.returned,
-    returnRate: r.soldQty ? r.returnedQty / r.soldQty : 0
+    grossQty: r.soldQty + r.replacedQty,
+    gross: r.revenue + r.replaced,
+    replaceRate: r.soldQty + r.replacedQty ? r.replacedQty / (r.soldQty + r.replacedQty) : 0
   }));
 }
 
@@ -244,10 +258,12 @@ function drawKpis(list) {
   const box = root?.querySelector('#st-kpis');
   if (!box) return;
 
-  const ords = list.filter((o) => o.kind !== 'return');
-  const rets = list.filter((o) => o.kind === 'return');
+  const ords = list.filter((o) => o.kind === 'order');
+  const reps = list.filter((o) => o.kind === 'replacement');
   const revenue = ords.reduce((a, o) => a + (Number(o.total) || 0), 0);
-  const returned = rets.reduce((a, o) => a + (Number(o.total) || 0), 0);
+  const soldQty = ords.reduce((a, o) => a + qtyOf(o), 0);
+  const replacedQty = reps.reduce((a, o) => a + qtyOf(o), 0);
+  const replaced = reps.reduce((a, o) => a + valueOf(o), 0);
   const active = new Set(ords.map((o) => o.company_id).filter((id) => id != null)).size;
   const pending = orders.filter((o) => o.status === 'new').length;
 
@@ -260,9 +276,10 @@ function drawKpis(list) {
 
   box.innerHTML =
     kpi('Заказов', int(ords.length), pending && filters.status === 'confirmed' ? `ещё ${int(pending)} ждут решения` : '') +
-    kpi('Выручка', money(revenue)) +
-    kpi('Возвраты', money(returned), `${int(rets.length)} шт · ${revenue ? pct(returned / revenue) : '0%'}`) +
-    kpi('Чистая выручка', money(revenue - returned)) +
+    kpi('Чистая', money(revenue), `${int(soldQty)} шт · по чекам`) +
+    kpi('Замены', money(replaced),
+        `${int(replacedQty)} шт · ${soldQty + replacedQty ? pct(replacedQty / (soldQty + replacedQty)) : '0%'} от привезённого`) +
+    kpi('Грязная', money(revenue + replaced), `${int(soldQty + replacedQty)} шт · с заменами`) +
     kpi('Средний чек', money(ords.length ? revenue / ords.length : 0)) +
     kpi('Активных компаний', int(active), `из ${int(companies.length)}`);
 }
@@ -292,10 +309,10 @@ const COLUMNS = {
   companies: [
     ['name', 'Компания', (r) => `<span style="font-weight:700">${esc(r.name)}</span>`],
     ['orders', 'Заказов', (r) => int(r.orders)],
-    ['revenue', 'Выручка', (r) => money(r.revenue)],
-    ['returns', 'Возвратов', (r) => int(r.returns)],
-    ['returned', 'Сумма возвратов', (r) => money(r.returned)],
-    ['net', 'Чистая', (r) => `<b>${money(r.net)}</b>`],
+    ['revenue', 'Чистая, ₽', (r) => `<b>${money(r.revenue)}</b>`],
+    ['replacedQty', 'Замены, шт', (r) => int(r.replacedQty)],
+    ['replaced', 'Замены, ₽', (r) => money(r.replaced)],
+    ['gross', 'Грязная, ₽', (r) => `<b>${money(r.gross)}</b>`],
     ['avg', 'Средний чек', (r) => money(r.avg)],
     ['share', 'Доля', (r) => shareBar(r.share)],
     ['users', 'Заказчиков', (r) => int(r.users)],
@@ -304,12 +321,13 @@ const COLUMNS = {
   items: [
     ['name', 'Позиция', (r) => `<span style="font-weight:700">${esc(r.name)}</span>`],
     ['category', 'Категория', (r) => (r.category ? `<span class="pill">${esc(r.category)}</span>` : '<span style="color:var(--ink-3)">—</span>')],
-    ['soldQty', 'Заказано, шт', (r) => int(r.soldQty)],
-    ['revenue', 'Выручка', (r) => money(r.revenue)],
-    ['returnedQty', 'Возвращено, шт', (r) => int(r.returnedQty)],
-    ['returned', 'Сумма возвратов', (r) => money(r.returned)],
-    ['returnRate', '% возврата', (r) => pct(r.returnRate)],
-    ['net', 'Чистая', (r) => `<b>${money(r.net)}</b>`],
+    ['soldQty', 'Чистая, шт', (r) => `<b>${int(r.soldQty)}</b>`],
+    ['replacedQty', 'Замены, шт', (r) => int(r.replacedQty)],
+    ['grossQty', 'Грязная, шт', (r) => `<b>${int(r.grossQty)}</b>`],
+    ['revenue', 'Чистая, ₽', (r) => money(r.revenue)],
+    ['replaced', 'Замены, ₽', (r) => money(r.replaced)],
+    ['gross', 'Грязная, ₽', (r) => money(r.gross)],
+    ['replaceRate', '% замен', (r) => pct(r.replaceRate)],
     ['orders', 'В заказах', (r) => int(r.orders)],
     ['companies', 'Компаний', (r) => int(r.companies)]
   ]

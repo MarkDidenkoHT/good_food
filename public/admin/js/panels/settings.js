@@ -15,14 +15,14 @@ let settings = {
   auth: { allow_owner_reset: false },
   design: { background_path: null },
   server: { public_url: '' },
+  contact: { manager_username: 'lovesushitrifle' },
   materials: { use_cost: true },
   orders: {
     allow_edit_confirmed: false, allow_delete_new: false,
-    returns_from_history: false,
     cutoff_enabled: false, cutoff_time: '22:00', lock_after_cutoff: true,
     after_cutoff: 'next_day', resume_time: '08:00'
   },
-  frontpad: { enabled: false, simulation: true, verbose: true, send_returns: false, delivery_time: '10:00' }
+  frontpad: { enabled: false, simulation: true, verbose: true, delivery_time: '10:00' }
 };
 let orphans = [];
 let root;
@@ -91,13 +91,12 @@ function draw() {
   const blocking = o.after_cutoff === 'block';
   const allowDelete = !!o.allow_delete_new;
   const editConfirmed = !!o.allow_edit_confirmed;
-  const fromHistory = !!o.returns_from_history;
   const fp = settings.frontpad || {};
   const fpOn = !!fp.enabled;
   const fpSim = fp.simulation !== false;
   const fpVerbose = fp.verbose !== false;
-  const fpReturns = !!fp.send_returns;
   const publicUrl = settings.server?.public_url || '';
+  const manager = settings.contact?.manager_username || '';
   const useCost = settings.materials?.use_cost !== false;
   const sb = settings.supabase_import || {};
 
@@ -191,6 +190,22 @@ function draw() {
     </div>
 
     <div class="card" style="margin-top:16px">
+      <div class="card__head"><div class="card__title">Связь с менеджером</div></div>
+      <div class="card__body">
+        <div class="field" style="margin-bottom:0">
+          <label class="field__label" for="manager-username">Telegram менеджера</label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <input id="manager-username" class="input" placeholder="lovesushitrifle"
+                   value="${esc(manager)}" style="flex:1 1 260px;min-width:0">
+            <button class="btn btn--sm" id="manager-save">Сохранить</button>
+          </div>
+          <p class="hint">Кнопка «Связаться с менеджером» в мини-приложении открывает чат
+             с этим аккаунтом. Подойдёт имя, @имя или ссылка t.me. Пусто — кнопки нет.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
       <div class="card__head"><div class="card__title">Уведомления о заказах</div></div>
       <div class="card__body">
         <div class="field" style="margin-bottom:0">
@@ -253,7 +268,7 @@ function draw() {
              приняли${cutoffOn && lockAfter ? ', но не позже времени закрытия' : ''}.</p>
         </div>
 
-        <div class="field">
+        <div class="field" style="margin-bottom:0">
           <span class="field__label">Отмена неподтверждённых заказов</span>
           <div class="seg" id="seg-delete">
             <button data-v="off" aria-pressed="${!allowDelete}">Запрещена</button>
@@ -261,17 +276,6 @@ function draw() {
           </div>
           <p class="hint">Разрешает заказчику удалить свой заказ, пока его не
              подтвердили.</p>
-        </div>
-
-        <div class="field" style="margin-bottom:0">
-          <span class="field__label">Оформление возврата</span>
-          <div class="seg" id="seg-returns">
-            <button data-v="free"    aria-pressed="${!fromHistory}">Из каталога</button>
-            <button data-v="history" aria-pressed="${fromHistory}">Только из истории заказов</button>
-          </div>
-          <p class="hint">${fromHistory
-            ? 'Вкладки «Возврат» в приложении нет. Заказчик открывает нужный заказ в истории и отмечает, что возвращает — не больше, чем было заказано.'
-            : 'Заказчик собирает возврат из каталога, как обычный заказ.'}</p>
         </div>
       </div>
     </div>
@@ -371,17 +375,6 @@ function draw() {
         </div>
 
         <div class="field">
-          <span class="field__label">Возвраты</span>
-          <div class="seg" id="seg-fp-ret">
-            <button data-v="off" aria-pressed="${!fpReturns}">Не передавать</button>
-            <button data-v="on"  aria-pressed="${fpReturns}">Передавать</button>
-          </div>
-          <p class="hint">${fpReturns
-            ? 'Возвраты уходят с «Артикулом возврата FrontPad» каждой позиции.'
-            : 'Возвраты в FrontPad не уходят.'}</p>
-        </div>
-
-        <div class="field">
           <span class="field__label">Подробные логи сервера</span>
           <div class="seg" id="seg-fp-verbose">
             <button data-v="on"  aria-pressed="${fpVerbose}">Включены</button>
@@ -425,6 +418,10 @@ function draw() {
   card.querySelector('#public-url-save').onclick = () => saveServer(urlInput.value);
   urlInput.onkeydown = (e) => { if (e.key === 'Enter') saveServer(urlInput.value); };
 
+  const managerInput = card.querySelector('#manager-username');
+  card.querySelector('#manager-save').onclick = () => saveContact(managerInput.value);
+  managerInput.onkeydown = (e) => { if (e.key === 'Enter') saveContact(managerInput.value); };
+
   card.querySelectorAll('#seg-cutoff button').forEach((b) => {
     b.onclick = () => saveOrders({ cutoff_enabled: b.dataset.v === 'on' });
   });
@@ -433,9 +430,6 @@ function draw() {
   });
   card.querySelectorAll('#seg-delete button').forEach((b) => {
     b.onclick = () => saveOrders({ allow_delete_new: b.dataset.v === 'on' });
-  });
-  card.querySelectorAll('#seg-returns button').forEach((b) => {
-    b.onclick = () => saveOrders({ returns_from_history: b.dataset.v === 'history' });
   });
   card.querySelectorAll('#seg-edit-confirmed button').forEach((b) => {
     b.onclick = () => saveOrders({ allow_edit_confirmed: b.dataset.v === 'on' });
@@ -504,9 +498,6 @@ function draw() {
       saveFrontpad({ simulation: sim });
     };
   });
-  card.querySelectorAll('#seg-fp-ret button').forEach((b) => {
-    b.onclick = () => saveFrontpad({ send_returns: b.dataset.v === 'on' });
-  });
   card.querySelectorAll('#seg-fp-verbose button').forEach((b) => {
     b.onclick = () => saveFrontpad({ verbose: b.dataset.v === 'on' });
   });
@@ -525,7 +516,7 @@ function draw() {
   // Only the fields that were not there a moment ago slide in.
   if (cutoffOn && shown.cutoff === false) markEntering(body, '#cutoff-time, #seg-lock, #sel-after');
   if (blocking && shown.blocking === false) markEntering(body, '#resume-time');
-  if (fpOn && shown.fp === false) markEntering(body, '#seg-fp-sim, #fp-deliv, #seg-fp-ret, #seg-fp-verbose');
+  if (fpOn && shown.fp === false) markEntering(body, '#seg-fp-sim, #fp-deliv, #seg-fp-verbose');
   shown = { cutoff: cutoffOn, blocking, fp: fpOn };
 
   paintIcons(body);
@@ -587,6 +578,18 @@ async function saveServer(raw) {
     } else {
       toast(res.webhook ? 'Адрес сохранён, бот переключён на него' : 'Адрес сохранён');
     }
+  } catch (e) {
+    toast(e.message, 'err');
+  }
+}
+
+/* The server cleans up what was pasted (@name, t.me links) and answers with
+   the username it kept, which the field then shows. */
+async function saveContact(raw) {
+  try {
+    const res = await api.put('/api/admin/settings/contact', { manager_username: raw });
+    settle('contact', res.value);
+    toast(res.value.manager_username ? 'Сохранено' : 'Кнопка «Связаться с менеджером» убрана');
   } catch (e) {
     toast(e.message, 'err');
   }
@@ -831,7 +834,7 @@ function fpTestHTML() {
       <div class="alert alert--err" style="margin:8px 0 0">
         <div class="alert__title">FrontPad не знает эти артикулы</div>
         <ul class="alert__list">${fpTest.unknown.map((u) =>
-          `<li>«${esc(u.name)}» — ${esc(u.article)}${u.kind === 'return' ? ' (возврат)' : ''}</li>`).join('')}</ul>
+          `<li>«${esc(u.name)}» — ${esc(u.article)}</li>`).join('')}</ul>
       </div>` : '<p class="hint">Все артикулы позиций найдены в FrontPad.</p>'}`;
 }
 

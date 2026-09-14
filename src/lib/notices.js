@@ -148,7 +148,7 @@ export async function announceCodeRotated({ company, code, actorName, suspended 
 
 /* ── orders ───────────────────────────────────────────────────────────── */
 
-const KIND = { order: 'Заказ', return: 'Возврат' };
+const KIND = { order: 'Заказ', replacement: 'Замена', return: 'Возврат' };
 const STATUS = {
   new:       '🕒 <b>Новый</b>',
   confirmed: '✅ <b>Подтверждён</b>',
@@ -160,11 +160,21 @@ const orderUrl = async (orderId) => {
   return base ? `${base}/admin#orders?focus=${orderId}` : null;
 };
 
+/* A replacement is not charged, so it carries no money anywhere a person
+   reads it: the lines have no sums and the total says so in words. */
+const isReplacement = (order) => order.kind === 'replacement';
+
 function orderLines(order) {
   return (Array.isArray(order.items) ? order.items : [])
-    .map((l) => `• ${esc(l.name)} × ${l.qty} — ${l.cost * l.qty} ₽`)
+    .map((l) => isReplacement(order)
+      ? `• ${esc(l.name)} × ${l.qty}`
+      : `• ${esc(l.name)} × ${l.qty} — ${l.cost * l.qty} ₽`)
     .join('\n');
 }
+
+const totalLine = (order) => (isReplacement(order)
+  ? 'Без оплаты — взамен списанного'
+  : `Итого: <b>${order.total ?? 0} ₽</b>`);
 
 function orderText(order, { company, user } = {}) {
   const when = new Date().toLocaleString('ru-RU', {
@@ -177,7 +187,7 @@ function orderText(order, { company, user } = {}) {
     '',
     orderLines(order),
     '',
-    `Итого: <b>${order.total ?? 0} ₽</b>`,
+    totalLine(order),
     order.comment ? `Комментарий: ${esc(order.comment)}` : null,
     '',
     STATUS[order.status] || order.status,
@@ -278,13 +288,16 @@ export async function announceOrderDecision(order) {
       orderText(order, ctx), { reply_markup: await orderMarkup(order) });
   }
 
-  const word = order.status === 'confirmed' ? 'подтверждён' : 'отклонён';
+  // «Замена» is feminine: «Замена подтверждена», «Заказ подтверждён»
+  const word = isReplacement(order)
+    ? (order.status === 'confirmed' ? 'подтверждена' : 'отклонена')
+    : (order.status === 'confirmed' ? 'подтверждён' : 'отклонён');
   const text = [
     `<b>${KIND[order.kind] || 'Заказ'} #${order.id} ${word}</b>`,
     '',
     orderLines(order),
     '',
-    `Итого: <b>${order.total ?? 0} ₽</b>`
+    totalLine(order)
   ].join('\n');
 
   const targets = new Set();

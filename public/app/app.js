@@ -1,6 +1,8 @@
-/* Good Food mini-app. Two modes over one catalog: an order and a return
-   differ only by the `kind` sent with the basket. Materials and their costs
-   are never fetched here — customers see items and prices only. */
+/* Good Food mini-app. Two baskets over one catalog: an order, which is paid,
+   and replacements — fresh items given in place of expired ones, delivered
+   but not charged. They differ only by the `kind` sent with the basket.
+   Materials and their costs are never fetched here — customers see items and
+   prices only. */
 
 import { hideSplash, showLoader, loaderHTML } from '/loader.js';
 
@@ -24,21 +26,27 @@ const view = document.getElementById('view');
 let me = null;
 let catalog = {
   items: [], categories: [], group_by_category: false, show_images: false,
-  image_size: 'md', background: null,
+  image_size: 'md', background: null, manager_username: '',
   orders: {
     cutoff_enabled: false, allow_delete_new: false,
     allow_edit_confirmed: false, ordering_blocked: false
   }
 };
-let kind = 'order';                 // order | return
+let kind = 'order';                 // order | replacement
 let screen = 'catalog';             // catalog | history
 /* Set while an already-sent order is being changed: the basket of that kind
    then stands for that order rather than for a new one. */
 let editing = null;                 // { id, kind } | null
-/* An order and a return are separate documents, so they get separate
+/* An order and replacements are separate documents, so they get separate
    baskets: adding to one never touches the other. */
-const carts = { order: new Map(), return: new Map() };
+const KINDS = ['order', 'replacement'];
+const carts = { order: new Map(), replacement: new Map() };
 const cart = () => carts[kind];
+
+/* How each kind of document is named. 'return' is an old document from before
+   replacements: it still shows in История, and nothing else can be done with it. */
+const DOC = { order: 'Заказ', replacement: 'Замена', return: 'Возврат' };
+const BASKET = { order: 'Заказ', replacement: 'Замены' };
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) =>
@@ -183,17 +191,18 @@ async function refreshRules() {
   try {
     catalog = await get('/api/app/catalog');
     paintBackground();
-    pruneOrderCart();
+    pruneCarts();
   } catch { /* leave the last known catalog in place */ }
 }
 
-/* An item withdrawn while the basket was open leaves the order basket. The
-   return basket keeps it — sending one back is still allowed. */
-function pruneOrderCart() {
-  for (const id of [...carts.order.keys()]) {
-    const it = catalog.items.find((x) => x.id === id);
-    if (!it || orderable(it)) continue;
-    carts.order.delete(id);
+/* An item withdrawn while a basket was open leaves it: a replacement is cooked
+   fresh, so a withdrawn item cannot be replaced either. */
+function pruneCarts() {
+  for (const k of KINDS) {
+    for (const id of [...carts[k].keys()]) {
+      const it = catalog.items.find((x) => x.id === id);
+      if (!it || !orderable(it)) carts[k].delete(id);
+    }
   }
 }
 
@@ -221,24 +230,23 @@ function render() {
     <div class="head">
       <div class="wrap">
         <div class="head__row">
-          <div class="head__name">${esc(me.company_name || 'Компания')}</div>
-          <div class="head__who">${esc(me.user_name || '')}</div>
+          <div class="head__id">
+            <div class="head__name">${esc(me.company_name || 'Компания')}</div>
+            <div class="head__who">${esc(me.user_name || '')}</div>
+          </div>
+          ${catalog.manager_username ? `
+          <button class="head__contact" id="contact" type="button">Связаться с менеджером</button>` : ''}
           ${catalog.can_reset_code ? `
           <button class="head__key" id="rotate-code" type="button"
                   title="Перевыпустить код компании" aria-label="Перевыпустить код компании">🔑</button>` : ''}
         </div>
         <div class="tabs">
-          <button class="tab" data-screen="catalog" data-kind="order"
-                  aria-selected="${screen === 'catalog' && kind === 'order'}"
-                  ${editing && editing.kind !== 'order' ? 'disabled' : ''}>
-            Заказ<span class="tab__count" data-count="order"></span>
-          </button>
-          ${returnsFromHistory() ? '' : `
-          <button class="tab" data-screen="catalog" data-kind="return"
-                  aria-selected="${screen === 'catalog' && kind === 'return'}"
-                  ${editing && editing.kind !== 'return' ? 'disabled' : ''}>
-            Возврат<span class="tab__count" data-count="return"></span>
-          </button>`}
+          ${KINDS.map((k) => `
+          <button class="tab" data-screen="catalog" data-kind="${k}"
+                  aria-selected="${screen === 'catalog' && kind === k}"
+                  ${editing && editing.kind !== k ? 'disabled' : ''}>
+            ${BASKET[k]}<span class="tab__count" data-count="${k}"></span>
+          </button>`).join('')}
           <button class="tab" data-screen="history"
                   aria-selected="${screen === 'history'}">История</button>
         </div>
@@ -246,8 +254,8 @@ function render() {
     </div>
     <div class="wrap" id="body"></div>`;
 
-  const rotate = view.querySelector('#rotate-code');
-  if (rotate) rotate.onclick = rotateCode;
+  view.querySelector('#rotate-code')?.addEventListener('click', rotateCode);
+  view.querySelector('#contact')?.addEventListener('click', contactManager);
 
   view.querySelectorAll('.tab').forEach((b) => {
     b.onclick = () => {
@@ -259,9 +267,15 @@ function render() {
 
   paintTabCounts();
 
-  if (screen === 'return') return renderReturn();
   if (screen === 'history') return renderHistory();
   renderCatalog();
+}
+
+/* A chat with the manager, inside Telegram where the app runs. */
+function contactManager() {
+  const url = `https://t.me/${encodeURIComponent(catalog.manager_username)}`;
+  if (tg?.openTelegramLink) tg.openTelegramLink(url);
+  else window.open(url, '_blank', 'noopener');
 }
 
 /* The owner's kill switch, shown only where an operator has allowed it.
@@ -303,18 +317,11 @@ function paintTabCounts() {
   });
 }
 
-/* With this on, a return is not composed from the catalogue: there is no
-   Возврат tab, and the customer starts one from a past order in История. */
-const returnsFromHistory = () => Boolean(catalog.orders?.returns_from_history);
-
-/* A withdrawn item can still be sent back, so it stays in the return list and
-   leaves the order one. */
 const orderable = (it) => it.available !== false;
-const forKind = () => (kind === 'return' ? catalog.items : catalog.items.filter(orderable));
 
 function renderCatalog() {
   const body = document.getElementById('body');
-  const items = forKind();
+  const items = catalog.items.filter(orderable);
 
   if (!items.length) {
     body.innerHTML = `${blockedBanner()}${editingBanner()}<div class="empty">${
@@ -349,7 +356,7 @@ function renderCatalog() {
   }
 
   applyImageSize();
-  body.innerHTML = blockedBanner() + editingBanner() + html;
+  body.innerHTML = blockedBanner() + editingBanner() + replacementNote() + html;
   body.querySelector('#edit-cancel')?.addEventListener('click', cancelEdit);
   body.querySelectorAll('[data-plus]').forEach((b) => {
     b.onclick = () => bump(Number(b.dataset.plus), +1);
@@ -358,6 +365,15 @@ function renderCatalog() {
     b.onclick = () => bump(Number(b.dataset.minus), -1);
   });
   renderCart();
+}
+
+/* Said where the choice is made, because the usual way of putting it — "3,
+   one of them a replacement" — is not how the two baskets add up. */
+function replacementNote() {
+  if (kind !== 'replacement') return '';
+  return `<div class="notice">Замена — свежий товар взамен списанного. Его привезут
+    вместе с заказом, но в чек он не войдёт. Нужно всего 3, из них 1 замена?
+    Укажите 2 в «Заказ» и 1 в «Замены».</div>`;
 }
 
 /* The admin picks one of three sizes; the sizes themselves live in the CSS,
@@ -378,7 +394,7 @@ function itemHTML(it) {
         : ''}
       <div class="item__body">
         <div class="item__name">${esc(it.item_name)}</div>
-        <div class="item__cost">${it.item_cost ?? 0} ₽</div>
+        <div class="item__cost">${kind === 'replacement' ? 'без оплаты' : `${it.item_cost ?? 0} ₽`}</div>
       </div>
       <div class="stepper ${qty ? '' : 'stepper--empty'}">
         <button class="stepper__minus" data-minus="${it.id}" aria-label="Убрать">−</button>
@@ -399,9 +415,6 @@ function bump(id, delta) {
 
 /* ── editing a sent order ───────────────────────────────────── */
 
-/* The catalog looks the same whether a basket is new or is standing in for a
-   sent order, so say plainly which one is being changed — and give the way
-   back out. */
 /* Ordering is shut between the cutoff and the next morning when the setting
    says so; saying when it opens again is more use than a dead button. */
 function blockedBanner() {
@@ -414,16 +427,20 @@ function blockedBanner() {
     Изменить уже отправленные заказы тоже нельзя.</div>`;
 }
 
+/* The catalog looks the same whether a basket is new or is standing in for a
+   sent order, so say plainly which one is being changed — and give the way
+   back out. */
 function editingBanner() {
   if (!editing) return '';
   return `
     <div class="editbar">
-      <span>Изменение ${editing.kind === 'return' ? 'возврата' : 'заказа'} #${editing.id}</span>
+      <span>Изменение ${editing.kind === 'replacement' ? 'замены' : 'заказа'} #${editing.id}</span>
       <button class="editbar__cancel" id="edit-cancel" type="button">Отмена</button>
     </div>`;
 }
 
 function startEdit(order) {
+  if (!KINDS.includes(order.kind)) return;
   editing = { id: order.id, kind: order.kind };
   kind = order.kind;
   // the sent lines become the basket; the catalog is then edited as usual
@@ -443,28 +460,25 @@ function cancelEdit() {
   render();
 }
 
-/* Repeat: the old lines go into the basket for the customer to look over and
-   send as a new order — a re-order is a new document, not a copy of a closed
-   one. Quantities add up, so repeating twice orders twice as much. */
+/* Repeat: the old lines go into the basket of the same kind for the customer
+   to look over and send as a new document — a re-order is new, not a copy of
+   a closed one. Quantities add up, so repeating twice orders twice as much. */
 function repeatOrder(order) {
   if (editing) return toast('Сначала завершите изменение заказа', 'err');
+  if (!KINDS.includes(order.kind)) return;
 
   const basket = carts[order.kind];
-  const wantsOrder = order.kind !== 'return';
   let missing = 0;
   for (const line of Array.isArray(order.items) ? order.items : []) {
     const id = Number(line.id);
     const it = catalog.items.find((i) => i.id === id);
     // the catalog may have moved on since: a line that is gone cannot be
-    // repriced, and one that is withdrawn cannot be ordered again — though it
-    // can still be returned
-    if (!it || (wantsOrder && !orderable(it))) { missing++; continue; }
+    // repriced, and one that is withdrawn cannot be ordered again
+    if (!it || !orderable(it)) { missing++; continue; }
     basket.set(id, Math.min(999, (basket.get(id) || 0) + (Number(line.qty) || 1)));
   }
 
-  if (!basket.size) {
-    return toast(wantsOrder ? 'Эти позиции больше не заказать' : 'Этих позиций больше нет в каталоге', 'err');
-  }
+  if (!basket.size) return toast('Эти позиции больше не заказать', 'err');
   if (missing) toast(`${missing} поз. больше недоступно`, 'err');
 
   kind = order.kind;
@@ -473,16 +487,19 @@ function repeatOrder(order) {
 }
 
 async function deleteOrder(order) {
-  if (!await ask(`Отменить ${order.kind === 'return' ? 'возврат' : 'заказ'} #${order.id}?`)) return;
+  const what = order.kind === 'replacement' ? 'замену' : 'заказ';
+  if (!await ask(`Отменить ${what} #${order.id}?`)) return;
   const { ok, data } = await send('DELETE', `/api/app/orders/${order.id}`);
   if (!ok) return toast(data.error || 'Не удалось отменить', 'err');
-  toast('Заказ отменён');
+  toast(order.kind === 'replacement' ? 'Замена отменена' : 'Заказ отменён');
   renderHistory();
 }
 
+/* ── cart ───────────────────────────────────────────────────── */
+
 /* The bar is the whole cart, not a running total: both baskets are itemised
-   with their own subtotals so nothing is hidden behind the tab you are not
-   looking at. They stay separate documents — the sums never merge. */
+   so nothing is hidden behind the tab you are not looking at. They stay
+   separate documents — only the order has a sum. */
 function cartLines(which) {
   return [...carts[which].entries()].map(([id, qty]) => {
     const it = catalog.items.find((x) => x.id === id);
@@ -491,25 +508,26 @@ function cartLines(which) {
 }
 
 const sumOf = (lines) => lines.reduce((a, l) => a + l.cost * l.qty, 0);
+const unitsOf = (lines) => lines.reduce((a, l) => a + l.qty, 0);
+
+/* The baskets that the send button would send: while editing, only the one
+   standing in for that order — the other is not part of the document. */
+function sendingGroups() {
+  return (editing ? [editing.kind] : KINDS)
+    .map((k) => ({ key: k, label: BASKET[k], lines: cartLines(k) }))
+    .filter((g) => g.lines.length);
+}
 
 function renderCart() {
   document.getElementById('cart')?.remove();
 
-  // while editing, the other basket is not part of this document and must not
-  // be sent along with it
-  const groups = (editing
-    ? [{ key: editing.kind, label: editing.kind === 'return' ? 'Возврат' : 'Заказ',
-         lines: cartLines(editing.kind) }]
-    : [
-        { key: 'order', label: 'Заказ', lines: cartLines('order') },
-        { key: 'return', label: 'Возврат', lines: cartLines('return') }
-      ]).filter((g) => g.lines.length);
-
+  const groups = sendingGroups();
   if (!groups.length) {
     document.body.style.paddingBottom = '24px';
     return;
   }
 
+  const free = (g) => g.key === 'replacement';
   const bar = document.createElement('div');
   bar.className = 'cart';
   bar.id = 'cart';
@@ -519,15 +537,15 @@ function renderCart() {
         ${groups.map((g) => `
           <div class="cart__group">
             <div class="cart__ghead">
-              <span class="cart__gname ${g.key === 'return' ? 'is-return' : ''}">${g.label}</span>
-              <span class="cart__gsum">${sumOf(g.lines)} ₽</span>
+              <span class="cart__gname ${free(g) ? 'is-replacement' : ''}">${g.label}</span>
+              <span class="cart__gsum">${free(g) ? 'без оплаты' : `${sumOf(g.lines)} ₽`}</span>
               <button class="cart__clear" data-clear="${g.key}" aria-label="Очистить ${g.label}">×</button>
             </div>
             ${g.lines.map((l) => `
               <div class="cart__line">
                 <span class="cart__lname">${esc(l.name)}</span>
                 <span class="cart__lqty">× ${l.qty}</span>
-                <span class="cart__lsum">${l.cost * l.qty} ₽</span>
+                <span class="cart__lsum">${free(g) ? '—' : `${l.cost * l.qty} ₽`}</span>
               </div>`).join('')}
           </div>`).join('')}
       </div>
@@ -555,8 +573,90 @@ function renderCart() {
 function submitLabel(groups) {
   if (editing) return `Сохранить изменения #${editing.id}`;
   if (catalog.orders?.ordering_blocked) return 'Приём заказов закрыт';
-  if (groups.length === 2) return 'Отправить заказ и возврат';
-  return groups[0].key === 'return' ? 'Оформить возврат' : 'Оформить заказ';
+  if (groups.length === 2) return 'Оформить заказ и замены';
+  return groups[0].key === 'replacement' ? 'Оформить замену' : 'Оформить заказ';
+}
+
+/* ── confirmation before sending ────────────────────────────── */
+
+/* Customers are used to saying "3, one of them a replacement" and expecting
+   three delivered and a bill for two, while the baskets add up: 3 ordered and
+   1 replaced is four delivered. So before anything is sent the whole picture
+   is laid out per item — what is on the bill, what is replaced, and what will
+   actually arrive — and nothing goes until they agree with it. */
+function confirmSend(groups) {
+  const byId = new Map();
+  for (const g of groups) {
+    for (const l of g.lines) {
+      const row = byId.get(l.id) || { name: l.name, paid: 0, replaced: 0 };
+      if (g.key === 'replacement') row.replaced += l.qty;
+      else row.paid += l.qty;
+      byId.set(l.id, row);
+    }
+  }
+  const rows = [...byId.values()].sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+
+  const order = groups.find((g) => g.key === 'order');
+  const replacement = groups.find((g) => g.key === 'replacement');
+  const paidUnits = order ? unitsOf(order.lines) : 0;
+  const paidSum = order ? sumOf(order.lines) : 0;
+  const replacedUnits = replacement ? unitsOf(replacement.lines) : 0;
+  const num = (n) => (n ? String(n) : '<span class="sum__zero">—</span>');
+
+  const title = editing
+    ? `Изменение ${editing.kind === 'replacement' ? 'замены' : 'заказа'} #${editing.id}`
+    : 'Проверьте заказ';
+
+  return new Promise((resolve) => {
+    const sheet = document.createElement('div');
+    sheet.className = 'sheet';
+    sheet.innerHTML = `
+      <div class="sheet__box" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+        <h2 class="sheet__title" id="sheet-title">${esc(title)}</h2>
+        <table class="sum">
+          <thead><tr><th>Позиция</th><th>По чеку</th><th>Замена</th><th>Привезём</th></tr></thead>
+          <tbody>${rows.map((r) => `
+            <tr>
+              <td>${esc(r.name)}</td>
+              <td>${num(r.paid)}</td>
+              <td>${num(r.replaced)}</td>
+              <td class="sum__deliver">${r.paid + r.replaced}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+        <div class="totals">
+          <div class="totals__row"><span>По чеку</span><b>${paidUnits} шт · ${paidSum} ₽</b></div>
+          ${replacedUnits ? `
+          <div class="totals__row"><span>Замена</span><b>${replacedUnits} шт · без оплаты</b></div>` : ''}
+          <div class="totals__row totals__row--main"><span>Привезём всего</span><b>${paidUnits + replacedUnits} шт</b></div>
+        </div>
+        ${replacedUnits ? `
+        <p class="sheet__hint">Замена привозится вместе с заказом и в чек не входит.
+           Если нужно всего 3, из которых 1 замена, — в заказе должно быть 2.</p>` : ''}
+        ${!editing && catalog.orders?.for_next_day
+          ? '<p class="sheet__hint">Заказ будет учтён на следующий день.</p>' : ''}
+        <div class="sheet__acts">
+          <button class="btn btn--ghost" type="button" data-answer="no">Изменить</button>
+          <button class="btn" type="button" data-answer="yes">Подтвердить</button>
+        </div>
+      </div>`;
+
+    const close = (yes) => {
+      sheet.remove();
+      document.removeEventListener('keydown', onKey);
+      resolve(yes);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') close(false); };
+
+    sheet.addEventListener('click', (e) => {
+      if (e.target === sheet) return close(false);
+      const answer = e.target.closest('[data-answer]')?.dataset.answer;
+      if (answer) close(answer === 'yes');
+    });
+    document.addEventListener('keydown', onKey);
+    document.body.append(sheet);
+    sheet.querySelector('[data-answer="yes"]').focus();
+  });
 }
 
 /* Sending a basket is the one wait here worth covering the screen for: it can
@@ -570,11 +670,19 @@ function blockScreen(label) {
   return () => el.remove();
 }
 
-/* One request per non-empty basket: an order and a return are separate
+/* One request per non-empty basket: an order and replacements are separate
    documents and are confirmed separately by an admin. */
 async function submit() {
   const btn = document.getElementById('cart-send');
+  const groups = sendingGroups();
+  if (!groups.length) return;
+
   btn.disabled = true;
+  if (!await confirmSend(groups)) {
+    btn.disabled = false;
+    return;
+  }
+
   const unblock = blockScreen(editing ? 'Сохраняем…' : 'Отправляем…');
   try {
     return await sendBaskets(btn);
@@ -586,7 +694,7 @@ async function submit() {
 async function sendBaskets(btn) {
   if (editing) return saveEdit(btn);
 
-  const jobs = ['order', 'return']
+  const jobs = KINDS
     .filter((k) => carts[k].size)
     .map((k) => ({ kind: k, items: [...carts[k].entries()].map(([id, qty]) => ({ id, qty })) }));
 
@@ -609,8 +717,8 @@ async function sendBaskets(btn) {
   }
 
   btn.disabled = false;
-  toast(done.length === 2 ? 'Заказ и возврат отправлены'
-        : done[0] === 'return' ? 'Возврат отправлен' : 'Заказ отправлен');
+  toast(done.length === 2 ? 'Заказ и замены отправлены'
+        : done[0] === 'replacement' ? 'Замена отправлена' : 'Заказ отправлен');
 
   screen = 'history';
   render();
@@ -637,6 +745,8 @@ async function saveEdit(btn) {
   screen = 'history';
   render();
 }
+
+/* ── history ────────────────────────────────────────────────── */
 
 let historyTimer = null;
 
@@ -691,8 +801,8 @@ const clock = (iso) => new Date(iso).toLocaleTimeString('ru-RU',
 function deadlineNote(o) {
   if (!o.editable_until) {
     return o.status === 'new' && !catalog.orders?.allow_edit_confirmed
-      ? 'Можно изменить, пока заказ не подтверждён'
-      : 'Заказ можно изменить';
+      ? `Можно изменить, пока ${o.kind === 'replacement' ? 'замена не подтверждена' : 'заказ не подтверждён'}`
+      : 'Можно изменить';
   }
   const sameDay = new Date(o.editable_until).toDateString() === new Date().toDateString();
   return `Можно изменить до ${clock(o.editable_until)}${sameDay ? '' : ' завтра'}`;
@@ -706,28 +816,28 @@ function paintHistory(orders) {
     const [cls, label] = BADGE[o.status] || ['', o.status];
     const lines = (Array.isArray(o.items) ? o.items : [])
       .map((l) => `${esc(l.name)} × ${l.qty}`).join('<br>');
+    const current = KINDS.includes(o.kind);
     const edit = mayEdit(o);
     const del = mayDelete(o);
     return `
       <div class="order">
         <div class="order__head">
-          <div class="order__id">${o.kind === 'return' ? 'Возврат' : 'Заказ'} #${o.id}</div>
+          <div class="order__id">${DOC[o.kind] || 'Заказ'} #${o.id}</div>
           <span class="badge ${cls}">${esc(label)}</span>
         </div>
         <div class="order__lines">${lines || '—'}</div>
-        <div class="order__total">${o.total ?? 0} ₽</div>
-        ${o.edited_at ? '<div class="order__note">Заказ был изменён</div>' : ''}
+        <div class="order__total">${o.kind === 'replacement' ? 'Без оплаты' : `${o.total ?? 0} ₽`}</div>
+        ${o.edited_at ? `<div class="order__note">${o.kind === 'replacement' ? 'Замена была изменена' : 'Заказ был изменён'}</div>` : ''}
+        ${current ? `
         <div class="order__acts">
           ${edit ? `<button class="btn btn--sm" data-edit="${o.id}">Изменить</button>` : ''}
           ${del ? `<button class="btn btn--sm btn--ghost" data-del="${o.id}">Отменить</button>` : ''}
-          ${o.returnable?.length
-            ? `<button class="btn btn--sm btn--ghost" data-return="${o.id}">Вернуть</button>` : ''}
           <button class="btn btn--sm btn--ghost" data-repeat="${o.id}">Повторить</button>
         </div>
         <div class="order__note">${
           edit ? esc(deadlineNote(o))
           : o.status === 'rejected' ? ''
-          : 'Заказ уже в работе — изменить нельзя'}</div>
+          : 'Уже в работе — изменить нельзя'}</div>` : ''}
       </div>`;
   }).join('');
 
@@ -741,125 +851,6 @@ function paintHistory(orders) {
   body.querySelectorAll('[data-repeat]').forEach((b) => {
     b.onclick = () => repeatOrder(byId.get(b.dataset.repeat));
   });
-  body.querySelectorAll('[data-return]').forEach((b) => {
-    b.onclick = () => openReturn(byId.get(b.dataset.return));
-  });
-}
-
-/* ── return out of a past order ──────────────────────────────────────────
-   Only reachable when Настройки puts returns behind the history. The picker
-   is the order's own lines, each capped at what is still returnable, so the
-   customer cannot ask for more back than they received. */
-
-let returning = null;          // { order, picked: Map(id -> qty) }
-
-function openReturn(order) {
-  if (!order?.returnable?.length) return;
-  returning = { order, picked: new Map() };
-  screen = 'return';
-  render();
-}
-
-function closeReturn() {
-  returning = null;
-  screen = 'history';
-  render();
-}
-
-function renderReturn() {
-  const body = document.getElementById('body');
-  if (!body) return;
-  const { order, picked } = returning;
-
-  const total = order.returnable.reduce(
-    (a, l) => a + l.cost * (picked.get(l.id) || 0), 0);
-  const units = [...picked.values()].reduce((a, n) => a + n, 0);
-
-  body.innerHTML = `
-    <div class="editbar">
-      <span>Возврат по заказу #${order.id}</span>
-      <button class="editbar__cancel" id="ret-cancel" type="button">Отмена</button>
-    </div>
-    <div class="list">
-      ${order.returnable.map((l) => {
-        const qty = picked.get(l.id) || 0;
-        return `
-          <div class="item ${qty ? 'item--picked' : ''}">
-            <div class="item__body">
-              <div class="item__name">${esc(l.name)}</div>
-              <div class="item__cost">${l.cost} ₽ · можно вернуть ${l.left} из ${l.qty}</div>
-            </div>
-            <div class="stepper ${qty ? '' : 'stepper--empty'}">
-              <button class="stepper__minus" data-rminus="${l.id}" aria-label="Убрать">−</button>
-              <span class="stepper__qty">${qty}</span>
-              <button class="stepper__plus" data-rplus="${l.id}" aria-label="Добавить"
-                      ${qty >= l.left ? 'disabled' : ''}>+</button>
-            </div>
-          </div>`;
-      }).join('')}
-    </div>`;
-
-  body.querySelectorAll('[data-rplus]').forEach((b) => {
-    b.onclick = () => bumpReturn(Number(b.dataset.rplus), +1);
-  });
-  body.querySelectorAll('[data-rminus]').forEach((b) => {
-    b.onclick = () => bumpReturn(Number(b.dataset.rminus), -1);
-  });
-  body.querySelector('#ret-cancel').onclick = closeReturn;
-
-  paintReturnBar(units, total);
-}
-
-function bumpReturn(id, delta) {
-  const line = returning.order.returnable.find((l) => l.id === id);
-  if (!line) return;
-  const next = Math.max(0, Math.min(line.left, (returning.picked.get(id) || 0) + delta));
-  if (next) returning.picked.set(id, next);
-  else returning.picked.delete(id);
-  renderReturn();
-}
-
-function paintReturnBar(units, total) {
-  document.getElementById('cart')?.remove();
-  if (!units) {
-    document.body.style.paddingBottom = '24px';
-    return;
-  }
-
-  const bar = document.createElement('div');
-  bar.className = 'cart';
-  bar.id = 'cart';
-  bar.innerHTML = `
-    <div class="wrap">
-      <div class="cart__ghead">
-        <span class="cart__gname is-return">Возврат по заказу #${returning.order.id}</span>
-        <span class="cart__gsum">${total} ₽</span>
-      </div>
-      <button class="btn" id="ret-send">Оформить возврат · ${units} шт.</button>
-    </div>`;
-  document.body.append(bar);
-  document.getElementById('ret-send').onclick = sendReturn;
-  document.body.style.paddingBottom = `${bar.offsetHeight + 16}px`;
-}
-
-async function sendReturn() {
-  const btn = document.getElementById('ret-send');
-  btn.disabled = true;
-  const unblock = blockScreen('Отправляем…');
-  try {
-    const items = [...returning.picked.entries()].map(([id, qty]) => ({ id, qty }));
-    const { ok, data } = await post('/api/app/orders', {
-      kind: 'return', source_order_id: returning.order.id, items
-    });
-    if (!ok) {
-      btn.disabled = false;
-      return toast(data.error || 'Не удалось отправить', 'err');
-    }
-    toast('Возврат отправлен');
-    closeReturn();
-  } finally {
-    unblock();
-  }
 }
 
 /* Every path through start() ends with a screen painted, so the splash comes

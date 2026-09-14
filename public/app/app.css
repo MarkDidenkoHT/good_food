@@ -69,9 +69,20 @@ input:focus, textarea:focus {
   background: var(--surface); border-bottom: 1px solid var(--line);
   padding-top: 14px;
 }
-.head__row { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
-.head__name { font-weight: 800; font-size: 17px; flex: 1 1 auto; letter-spacing: -.2px; }
+.head__row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.head__id { flex: 1 1 auto; min-width: 0; }
+.head__name {
+  font-weight: 800; font-size: 17px; letter-spacing: -.2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .head__who { font-size: 12px; color: var(--ink-3); }
+.head__contact {
+  flex: 0 0 auto; padding: 6px 11px; border: 1px solid var(--brand); border-radius: var(--r-pill);
+  background: none; color: var(--brand); cursor: pointer; white-space: nowrap;
+  font-family: inherit; font-size: 12px; font-weight: 700;
+  transition: background var(--speed);
+}
+@media (hover: hover) { .head__contact:hover { background: var(--brand-soft); } }
 /* Owner only, and deliberately quiet: it is not an everyday button. */
 .head__key {
   border: 0; background: none; cursor: pointer; padding: 2px 4px;
@@ -171,7 +182,7 @@ input:focus, textarea:focus {
   font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .6px;
   color: var(--ink-3); flex: 1 1 auto;
 }
-.cart__gname.is-return { color: var(--brand); }
+.cart__gname.is-replacement { color: var(--brand); }
 .cart__gsum { font-weight: 800; font-size: 15px; }
 .cart__clear {
   width: 22px; height: 22px; flex: 0 0 auto; border: 0; border-radius: 50%;
@@ -249,3 +260,47 @@ input:focus, textarea:focus {
 }
 .cart__note { font-size: 12px; color: var(--ink-3); margin-bottom: 8px; }
 .btn--sm { width: auto; padding: 7px 12px; font-size: 13px; }
+
+/* ── confirmation before sending ─────────────────────────────── */
+.sheet {
+  position: fixed; inset: 0; z-index: 30;
+  display: flex; align-items: flex-end; justify-content: center;
+  background: rgba(0, 0, 0, .45);
+}
+.sheet__box {
+  width: 100%; max-width: 560px; max-height: 88vh;
+  overflow-y: auto; overscroll-behavior: contain;
+  background: var(--surface); color: var(--ink);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  padding: 18px 16px calc(16px + env(safe-area-inset-bottom));
+  box-shadow: var(--shadow-lg);
+}
+.sheet__title { margin: 0 0 12px; font-size: 17px; font-weight: 800; }
+.sheet__hint { margin: 10px 0 0; font-size: 12px; line-height: 1.45; color: var(--ink-3); }
+.sheet__acts { display: flex; gap: 8px; margin-top: 16px; }
+.sheet__acts .btn { flex: 1 1 0; }
+
+.sum { width: 100%; border-collapse: collapse; font-size: 13px; }
+.sum th {
+  padding: 0 0 6px 8px; text-align: right; color: var(--ink-3);
+  font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px;
+}
+.sum td {
+  padding: 8px 0 8px 8px; text-align: right; border-top: 1px solid var(--line);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.sum th:first-child, .sum td:first-child { padding-left: 0; text-align: left; }
+.sum td:first-child { font-weight: 700; white-space: normal; word-break: break-word; }
+.sum__deliver { font-weight: 800; color: var(--brand); }
+.sum__zero { color: var(--ink-3); }
+
+.totals {
+  margin-top: 14px; padding: 10px 12px; border-radius: var(--r-md);
+  background: var(--surface-2); font-size: 14px;
+}
+.totals__row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
+.totals__row b { white-space: nowrap; }
+.totals__row--main {
+  margin-top: 6px; padding-top: 9px; border-top: 1px solid var(--line);
+  font-size: 15px; font-weight: 800;
+}

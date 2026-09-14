@@ -12,8 +12,9 @@
  * Every attempt, simulated or real, is written to frontpad_log so it can be
  * read back from the admin panel after the server logs have rolled over.
  *
- * Returns are skipped unless «Передавать возвраты» is on; then they go out
- * with each item's return article (frontpad_return_id).
+ * Only orders are sent. A replacement is delivered but not charged — the
+ * expired item it stands in for is written off by staff in FrontPad by hand —
+ * and old return documents are history, so neither ever leaves the server.
  */
 
 import { db } from './db.js';
@@ -28,7 +29,6 @@ export const FRONTPAD_DEFAULTS = {
   enabled: false,
   simulation: true,        // on until someone deliberately switches it off
   verbose: true,
-  send_returns: false,
   delivery_time: '10:00'   // FrontPad datetime = service day + 1 at this time
 };
 
@@ -92,36 +92,32 @@ export function deliveryDatetime(settings, now = new Date()) {
    none: a silently short order is worse for the kitchen than one that never
    arrived. */
 async function buildPayload(order, settings, log) {
-  const isReturn = order.kind === 'return';
-  const column = isReturn ? 'frontpad_return_id' : 'frontpad_id';
-
   const lines = Array.isArray(order.items) ? order.items : [];
   const ids = [...new Set(lines.map((l) => Number(l?.id)).filter(Number.isFinite))];
   const { data: items, error } = ids.length
-    ? await db.from('items').select(`id, item_name, ${column}`).in('id', ids)
+    ? await db.from('items').select('id, item_name, frontpad_id').in('id', ids)
     : { data: [] };
   if (error) throw error;
   const byId = new Map((items || []).map((i) => [i.id, i]));
 
-  log.debug(`article map (${column}): ` +
-    JSON.stringify(Object.fromEntries((items || []).map((i) => [i.item_name, i[column]]))));
+  log.debug('article map: ' +
+    JSON.stringify(Object.fromEntries((items || []).map((i) => [i.item_name, i.frontpad_id]))));
 
   const products = [];
   const missing = [];
   for (const line of lines) {
     const item = byId.get(Number(line?.id));
-    const article = item?.[column];
+    const article = item?.frontpad_id;
     const name = item?.item_name || line?.name || `#${line?.id}`;
     if (!article) { missing.push(name); continue; }
     const qty = Number(line?.qty) || 0;
-    log.debug(`${isReturn ? 'return' : 'new'} «${name}» → article=${article} qty=${qty}`);
+    log.debug(`new «${name}» → article=${article} qty=${qty}`);
     products.push({ article: String(article), qty, name });
   }
 
   if (missing.length) {
-    const where = isReturn ? '«Артикул возврата FrontPad»' : '«Артикул FrontPad»';
     return {
-      error: `Нет артикула для: ${missing.map((n) => `«${n}»`).join(', ')} (Позиции → ${where})`
+      error: `Нет артикула для: ${missing.map((n) => `«${n}»`).join(', ')} (Позиции → «Артикул FrontPad»)`
     };
   }
   if (!products.length) return { error: 'В заказе нет позиций' };
@@ -134,7 +130,7 @@ async function buildPayload(order, settings, log) {
   const payload = {
     secret: KEY(),
     name: store,
-    descr: `${store} #${order.id}` + (isReturn ? ' (возврат)' : '') + (order.comment ? ` — ${order.comment}` : ''),
+    descr: `${store} #${order.id}` + (order.comment ? ` — ${order.comment}` : ''),
     datetime: deliveryDatetime(settings)
   };
   if (company?.phone) payload.phone = company.phone;
@@ -147,7 +143,6 @@ async function buildPayload(order, settings, log) {
 
 const SKIP_REASONS = {
   disabled: 'Передача в FrontPad выключена',
-  return: 'Передача возвратов выключена',
   already_sent: 'Уже передан в FrontPad'
 };
 
@@ -173,7 +168,7 @@ async function markOrder(orderId, patch) {
 /* ── the entry point ──────────────────────────────────────────────────── */
 
 /* Sends one order. Never throws; the answer says what happened:
-     { ok: true, skipped }            — nothing to do (off, return, already sent)
+     { ok: true, skipped }            — nothing to do (off, not an order, already sent)
      { ok: true, simulated: true }    — built and logged, not sent
      { ok: true, order_id, ... }      — FrontPad accepted it
      { ok: false, error }             — refused; the caller decides what that blocks
@@ -196,12 +191,15 @@ export async function pushOrder(order) {
 }
 
 async function pushOrderNow(order) {
+  // Not a FrontPad document at all, so there is no attempt to log and nothing
+  // to mark on the row: its FrontPad state stays 'none'.
+  if (order.kind !== 'order') return { ok: true, skipped: 'not_order' };
+
   const settings = await frontpadSettings();
   const log = logger(order?.id, settings.verbose);
 
   try {
     if (!settings.enabled) return await skip(order, 'disabled', log);
-    if (order.kind === 'return' && !settings.send_returns) return await skip(order, 'return', log);
     if (order.frontpad_status === 'sent') return await skip(order, 'already_sent', log);
     if (!settings.simulation && !frontpadConfigured()) {
       const error = 'FRONTPAD_APIKEY не задан на сервере';
@@ -316,15 +314,12 @@ export async function testConnection() {
   const known = new Set((Array.isArray(resp.product_id) ? resp.product_id : Object.values(resp.product_id || {}))
     .map((a) => String(a).trim()));
 
-  const { data: items } = await db
-    .from('items').select('item_name, frontpad_id, frontpad_return_id');
+  const { data: items } = await db.from('items').select('item_name, frontpad_id');
   const unknown = [];
   for (const i of items || []) {
-    for (const col of ['frontpad_id', 'frontpad_return_id']) {
-      const a = i[col];
-      if (a && known.size && !known.has(String(a).trim())) {
-        unknown.push({ name: i.item_name, article: a, kind: col === 'frontpad_id' ? 'order' : 'return' });
-      }
+    const a = i.frontpad_id;
+    if (a && known.size && !known.has(String(a).trim())) {
+      unknown.push({ name: i.item_name, article: a });
     }
   }
   return { ok: true, products: known.size, unknown };

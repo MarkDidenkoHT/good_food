@@ -20,12 +20,15 @@ import { db } from './db.js';
 
 export const TZ = 'Europe/Chisinau';
 
+/* What a customer can send. A replacement is a fresh item given in place of an
+   expired one: the kitchen makes it and it is delivered, but it is not charged
+   and never goes to FrontPad. Rows of kind 'return' are older documents from
+   before replacements; they are kept as they were and nothing new is made. */
+export const ORDER_KINDS = ['order', 'replacement'];
+
 export const ORDER_DEFAULTS = {
   allow_edit_confirmed: false,
   allow_delete_new: false,
-  // returns are composed freely from the catalogue, or only against a past
-  // order — see returnableFrom() below
-  returns_from_history: false,
   cutoff_enabled: false,
   cutoff_time: '22:00',
   lock_after_cutoff: true,
@@ -180,11 +183,14 @@ export function orderingWindow(settings, now = new Date()) {
 /* Prices the basket from the database — the browser sends ids and quantities
    and nothing about cost, on an edit and a repeat exactly as on a first
    submit. */
-/* `forOrder` applies the availability rule: an item taken off the list can
-   still be returned, so only a new order is refused. Blocked names come back
-   rather than being dropped quietly — a basket filled before the item was
-   switched off has to say why it cannot be sent. */
-export async function priceLines(wanted, { forOrder = false } = {}) {
+/* Withdrawn items are refused for an order and a replacement alike — a
+   replacement is cooked fresh too. Blocked names come back rather than being
+   dropped quietly: a basket filled before the item was switched off has to
+   say why it cannot be sent.
+
+   A replacement is delivered but not charged, so its total is 0. Its lines
+   still carry the catalogue price, which is what the statistics value it at. */
+export async function priceLines(wanted, { kind = 'order' } = {}) {
   const ids = [...new Set((wanted || []).map((l) => Number(l?.id)).filter(Number.isFinite))];
   if (!ids.length) return { lines: [], total: 0, blocked: [] };
 
@@ -198,91 +204,15 @@ export async function priceLines(wanted, { forOrder = false } = {}) {
   for (const line of wanted) {
     const item = byId.get(Number(line?.id));
     if (!item) continue;
-    if (forOrder && item.available === false) {
+    if (item.available === false) {
       blocked.push(item.item_name || `#${item.id}`);
       continue;
     }
     const qty = Math.min(999, Math.max(1, Math.round(Number(line?.qty)) || 1));
     lines.push({ id: item.id, name: item.item_name, cost: item.item_cost ?? 0, qty });
   }
-  return { lines, total: lines.reduce((acc, l) => acc + l.cost * l.qty, 0), blocked };
-}
-
-/* ── returns against a past order ──────────────────────────────────────
-   Under `returns_from_history` a return is not composed from the catalogue
-   but picked out of an order that was actually placed. What is still
-   returnable is that order's lines less everything already sent back against
-   it, so the same portion cannot be returned twice over several attempts.
-
-   Lines are priced from the order's own snapshot, not from today's catalogue:
-   the customer is sending back what they bought, at what they were charged. */
-
-/* Returns null when the order is not one this company may return against. */
-export async function returnableFrom(orderId, companyId) {
-  const { data: order, error } = await db
-    .from('orders')
-    .select('id, company_id, kind, status, items, created_at, service_date')
-    .eq('id', orderId)
-    .maybeSingle();
-  if (error) throw error;
-
-  if (!order) return null;
-  if (String(order.company_id) !== String(companyId)) return null;
-  if (order.kind !== 'order') return null;          // you cannot return a return
-  if (order.status === 'rejected') return null;     // never delivered
-
-  const { data: prior, error: pErr } = await db
-    .from('orders')
-    .select('items')
-    .eq('source_order_id', orderId)
-    .neq('status', 'rejected');
-  if (pErr) throw pErr;
-
-  const used = new Map();
-  for (const r of prior || []) {
-    for (const l of Array.isArray(r.items) ? r.items : []) {
-      const id = Number(l.id);
-      used.set(id, (used.get(id) || 0) + (Number(l.qty) || 0));
-    }
-  }
-
-  const lines = (Array.isArray(order.items) ? order.items : []).map((l) => {
-    const id = Number(l.id);
-    const qty = Number(l.qty) || 0;
-    return {
-      id,
-      name: l.name,
-      cost: Number(l.cost) || 0,
-      qty,
-      left: Math.max(0, qty - (used.get(id) || 0))
-    };
-  });
-
-  return { order, lines };
-}
-
-/* Prices a basket against what is still returnable. Refuses rather than
-   trimming: a customer who asked for three back should not silently get one. */
-export function priceReturn(wanted, returnable) {
-  const byId = new Map(returnable.lines.map((l) => [l.id, l]));
-  const lines = [];
-  const over = [];
-
-  for (const w of wanted || []) {
-    const src = byId.get(Number(w?.id));
-    if (!src) continue;                       // not part of that order
-    const qty = Math.max(1, Math.round(Number(w?.qty)) || 1);
-    if (qty > src.left) { over.push(src.name); continue; }
-    lines.push({ id: src.id, name: src.name, cost: src.cost, qty });
-  }
-
-  return { lines, total: lines.reduce((a, l) => a + l.cost * l.qty, 0), over };
-}
-
-export function overMessage(names) {
-  return names.length === 1
-    ? `«${names[0]}» — столько вернуть нельзя`
-    : `Столько вернуть нельзя: ${names.map((n) => `«${n}»`).join(', ')}`;
+  const total = kind === 'replacement' ? 0 : lines.reduce((acc, l) => acc + l.cost * l.qty, 0);
+  return { lines, total, blocked };
 }
 
 /* The same sentence from both the create and the edit path. */

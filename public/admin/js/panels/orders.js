@@ -23,7 +23,8 @@ const filters = {
   company: ''        // free text: matches the company name, empty = all
 };
 
-const KIND = { order: 'Заказ', return: 'Возврат' };
+/* 'return' is an old document from before replacements, kept as it was. */
+const KIND = { order: 'Заказ', replacement: 'Замена', return: 'Возврат' };
 const STATUS = {
   new: ['Новый', 'pill--warn'],
   confirmed: ['Подтверждён', 'pill--on'],
@@ -48,7 +49,7 @@ export const ordersPanel = {
   label: 'Заказы',
   icon: 'orders',
   title: 'Заказы',
-  subtitle: 'Заказы и возвраты компаний',
+  subtitle: 'Заказы и замены компаний',
 
   actions: () => [
     h(`<button class="btn btn--ghost btn--icon" id="ord-refresh" title="Обновить"><span data-icon="refresh"></span></button>`)
@@ -119,7 +120,7 @@ function drawToolbar() {
     <span class="toolbar__sep"></span>
 
     <button class="btn btn--sm" id="b-export-orders" title="Скачать заказы в Excel"><span data-icon="download"></span>Заказы</button>
-    <button class="btn btn--sm" id="b-export-returns" title="Скачать возвраты в Excel"><span data-icon="download"></span>Возвраты</button>
+    <button class="btn btn--sm" id="b-export-replacements" title="Скачать замены в Excel"><span data-icon="download"></span>Замены</button>
     <button class="btn btn--sm" id="b-export-materials" title="Скачать сырьё в Excel"><span data-icon="download"></span>Сырьё</button>
     <button class="btn btn--sm btn--primary" id="b-send-kitchen">На кухню</button>
 
@@ -135,7 +136,8 @@ function drawToolbar() {
     <select class="input input--sm" id="f-kind" title="Тип">
       <option value="all"    ${filters.kind === 'all' ? 'selected' : ''}>Все типы</option>
       <option value="order"  ${filters.kind === 'order' ? 'selected' : ''}>Заказы</option>
-      <option value="return" ${filters.kind === 'return' ? 'selected' : ''}>Возвраты</option>
+      <option value="replacement" ${filters.kind === 'replacement' ? 'selected' : ''}>Замены</option>
+      <option value="return" ${filters.kind === 'return' ? 'selected' : ''}>Возвраты (старые)</option>
     </select>
 
     <input class="input input--sm" id="f-company" list="company-options"
@@ -161,7 +163,7 @@ function drawToolbar() {
   bar.querySelector('#f-company').oninput = (e) => { filters.company = e.target.value; draw(); };
 
   bar.querySelector('#b-export-orders').onclick = () => exportOrders('order');
-  bar.querySelector('#b-export-returns').onclick = () => exportOrders('return');
+  bar.querySelector('#b-export-replacements').onclick = () => exportOrders('replacement');
   bar.querySelector('#b-export-materials').onclick = exportMaterials;
   bar.querySelector('#b-send-kitchen').onclick = sendToKitchen;
 
@@ -227,7 +229,7 @@ function rowHTML(o) {
   return `
     <tr id="order-row-${o.id}">
       <td class="num">${o.id}</td>
-      <td><span class="pill ${o.kind === 'return' ? 'pill--off' : ''}">${KIND[o.kind] || o.kind}</span>
+      <td><span class="pill ${o.kind === 'order' ? '' : 'pill--off'}">${KIND[o.kind] || o.kind}</span>
         ${sourceNote(o)}</td>
       <td style="font-weight:700">${esc(o.companies?.company_name || '—')}</td>
       <td>${esc(o.users?.user_name || '—')}</td>
@@ -235,7 +237,7 @@ function rowHTML(o) {
         ? lines.map((l) => `<span class="chip">${esc(l.name)} <span class="chip__qty">&times;${l.qty}</span></span>`).join(' ')
         : '<span style="color:var(--ink-3)">—</span>'}
         ${o.comment ? `<div class="hint" style="margin:4px 0 0">${esc(o.comment)}</div>` : ''}</td>
-      <td class="num">${o.total ?? 0} ₽</td>
+      <td class="num">${o.kind === 'replacement' ? 'без оплаты' : `${o.total ?? 0} ₽`}</td>
       <td><span class="pill ${cls}">${esc(label)}</span>
         ${frontpadNote(o)}
         ${o.edited_at
@@ -248,9 +250,10 @@ function rowHTML(o) {
           <button class="btn btn--sm btn--primary" data-decide="${o.id}" data-status="confirmed">Принять</button>
           <button class="btn btn--sm" data-decide="${o.id}" data-status="rejected">Отклонить</button>` : ''}
         ${o.status === 'confirmed' && ['failed', 'simulated', 'skipped', 'none'].includes(o.frontpad_status || 'none')
-          && (o.kind === 'order' || o.frontpad_status !== 'none') ? `
+          && o.kind === 'order' ? `
           <button class="btn btn--sm" data-fp="${o.id}" title="Передать заказ в FrontPad">В FrontPad</button>` : ''}
-        <button class="btn btn--ghost btn--icon btn--sm" data-invoice="${o.id}" title="Скачать накладную"><span data-icon="print"></span></button>
+        ${o.kind === 'replacement' ? '' /* not charged: no накладная, as nothing goes to FrontPad either */ : `
+        <button class="btn btn--ghost btn--icon btn--sm" data-invoice="${o.id}" title="Скачать накладную"><span data-icon="print"></span></button>`}
       </div></td>
     </tr>`;
 }
@@ -272,9 +275,10 @@ function sourceNote(o) {
 function decide(id, status) {
   const order = rows.find((r) => String(r.id) === String(id));
   const verb = status === 'confirmed' ? 'Подтвердить' : 'Отклонить';
+  const replacement = order?.kind === 'replacement';
   confirmDialog(
-    `${verb} заказ #${id}`,
-    `${verb} ${KIND[order?.kind] || 'заказ'} на ${order?.total ?? 0} ₽? ` +
+    `${verb} ${replacement ? 'замену' : 'заказ'} #${id}`,
+    `${verb} ${replacement ? 'замену (без оплаты)' : `заказ на ${order?.total ?? 0} ₽`}? ` +
     'Заказчик получит уведомление в Telegram.',
     async () => {
       // a FrontPad refusal comes back as an error and keeps the dialog open,
@@ -344,37 +348,35 @@ function applyFocus() {
 
 function exportOrders(kind) {
   const list = visible().filter((o) => o.kind === kind);
+  const replacements = kind === 'replacement';
   if (!list.length) {
-    return toast(kind === 'return' ? 'Возвратов в выборке нет' : 'Заказов в выборке нет', 'err');
+    return toast(replacements ? 'Замен в выборке нет' : 'Заказов в выборке нет', 'err');
   }
 
-  // The returns file gets one extra column: which order each line came back
-  // from. It is left off the orders file, where it would be empty throughout.
-  const isReturns = kind === 'return';
-  const head = ['№', 'Тип', 'Компания', 'Заказал', 'Позиция', 'Кол-во', 'Цена', 'Сумма',
-                'Статус', 'Создан'];
-  if (isReturns) head.splice(1, 0, 'Из заказа');
+  // A replacement is not charged, so its file has no money columns.
+  const head = replacements
+    ? ['№', 'Тип', 'Компания', 'Заказал', 'Позиция', 'Кол-во', 'Статус', 'Создан']
+    : ['№', 'Тип', 'Компания', 'Заказал', 'Позиция', 'Кол-во', 'Цена', 'Сумма', 'Статус', 'Создан'];
 
   const out = [head];
   for (const o of list) {
     const lines = Array.isArray(o.items) ? o.items : [];
-    const lead = isReturns
-      ? [o.id, o.source_order_id || '', KIND[o.kind]]
-      : [o.id, KIND[o.kind]];
+    const lead = [o.id, KIND[o.kind], o.companies?.company_name || '', o.users?.user_name || ''];
     const tail = [STATUS[o.status]?.[0] || o.status, fmtDate(o.created_at)];
-    const who = [o.companies?.company_name || '', o.users?.user_name || ''];
 
     // one row per line so the file pivots cleanly in a spreadsheet
     if (!lines.length) {
-      out.push([...lead, ...who, '', '', '', o.total ?? 0, ...tail]);
+      out.push(replacements ? [...lead, '', '', ...tail] : [...lead, '', '', '', o.total ?? 0, ...tail]);
       continue;
     }
     for (const l of lines) {
-      out.push([...lead, ...who, l.name, l.qty, l.cost, l.cost * l.qty, ...tail]);
+      out.push(replacements
+        ? [...lead, l.name, l.qty, ...tail]
+        : [...lead, l.name, l.qty, l.cost, l.cost * l.qty, ...tail]);
     }
   }
-  downloadXlsx(kind === 'return' ? 'vozvraty' : 'zakazy', out,
-               { sheetName: kind === 'return' ? 'Возвраты' : 'Заказы' });
+  downloadXlsx(replacements ? 'zameny' : 'zakazy', out,
+               { sheetName: replacements ? 'Замены' : 'Заказы' });
   toast(`Выгружено: ${list.length}`);
 }
 
@@ -408,8 +410,8 @@ async function exportMaterials() {
       materials.push(['Итого', '', '', '', s.materials_total]);
     }
 
-    const items = [['Позиция', 'К приготовлению']];
-    s.items.forEach((i) => items.push([i.name, i.qty]));
+    const items = [['Позиция', 'К приготовлению', 'Из них замена']];
+    s.items.forEach((i) => items.push([i.name, i.qty, i.replaced || 0]));
 
     downloadXlsx('syryo', [
       { name: 'Сырьё', rows: materials },
@@ -427,7 +429,7 @@ function sendToKitchen() {
 
   confirmDialog(
     'Отправить на кухню',
-    `Отправить список на приготовление по ${ids.length} заказам в группу кухни?`,
+    `Отправить в группу кухни список на приготовление по выбранным заказам и заменам (${ids.length})?`,
     async () => {
       const s = await api.post('/api/admin/orders/send-kitchen', { ids });
       toast(`Отправлено: ${s.items.length} позиций`);

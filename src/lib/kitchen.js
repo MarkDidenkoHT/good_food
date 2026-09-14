@@ -1,6 +1,6 @@
 import { db } from './db.js';
 import { esc } from './telegram.js';
-import { localDate } from './orders.js';
+import { localDate, ORDER_KINDS } from './orders.js';
 
 /* The prep list: what the kitchen has to make for a set of orders. The
    «На кухню» button, «Отправить сейчас» on a kitchen reminder and the
@@ -12,23 +12,27 @@ export const roundQty = (n) => Math.round(n * 1000) / 1000;
 const fmtQty = (n) => (Number(n) || 0).toLocaleString('ru-RU', { maximumFractionDigits: 3 });
 
 /* What the kitchen has to make for a set of orders: the items, and the
-   materials those items consume. Returns are excluded — nothing is prepared
-   for goods coming back. Materials live only here and in the panel; the
-   mini-app never sees them. */
+   materials those items consume. Replacements count in full — they are cooked
+   and delivered like any order, only not charged — and each item says how many
+   of its units are replacements. Old return documents are left out. Materials
+   live only here and in the panel; the mini-app never sees them. */
 export async function summarise(ids) {
   const { data: orders, error } = await db
     .from('orders').select('id, kind, items, total').in('id', ids);
   if (error) throw error;
 
-  const prep = (orders || []).filter((o) => o.kind === 'order');
+  const prep = (orders || []).filter((o) => ORDER_KINDS.includes(o.kind));
 
-  // item id -> units to make
+  // item id -> units to make, and how many of those are replacements
   const itemQty = new Map();
+  const replacedQty = new Map();
   for (const o of prep) {
     for (const line of Array.isArray(o.items) ? o.items : []) {
       const id = Number(line.id);
       if (!Number.isFinite(id)) continue;
-      itemQty.set(id, (itemQty.get(id) || 0) + (Number(line.qty) || 0));
+      const qty = Number(line.qty) || 0;
+      itemQty.set(id, (itemQty.get(id) || 0) + qty);
+      if (o.kind === 'replacement') replacedQty.set(id, (replacedQty.get(id) || 0) + qty);
     }
   }
 
@@ -45,7 +49,7 @@ export async function summarise(ids) {
 
   for (const [id, qty] of itemQty) {
     const item = byId.get(id);
-    items.push({ id, name: item?.item_name || `#${id}`, qty });
+    items.push({ id, name: item?.item_name || `#${id}`, qty, replaced: replacedQty.get(id) || 0 });
 
     for (const m of Array.isArray(item?.materials) ? item.materials : []) {
       const meta = matById.get(Number(m.id));
@@ -65,7 +69,8 @@ export async function summarise(ids) {
     .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
 
   return {
-    order_count: prep.length,
+    order_count: prep.filter((o) => o.kind === 'order').length,
+    replacement_count: prep.filter((o) => o.kind === 'replacement').length,
     items: items.sort((a, b) => a.name.localeCompare(b.name, 'ru')),
     materials: list,
     materials_total: list.reduce((a, m) => a + m.total, 0)
@@ -88,10 +93,12 @@ export function kitchenText(summary, { cost = true } = {}) {
 
   return [
     '<b>Список на приготовление</b>',
-    `Заказов: ${summary.order_count}`,
+    `Заказов: ${summary.order_count}` +
+      (summary.replacement_count ? `, замен: ${summary.replacement_count}` : ''),
     '',
     '<b>Позиции</b>',
-    ...summary.items.map((i) => `• ${esc(i.name)} — ${i.qty} шт.`),
+    ...summary.items.map((i) =>
+      `• ${esc(i.name)} — ${i.qty} шт.` + (i.replaced ? ` (из них замена ${i.replaced})` : '')),
     '',
     '<b>Сырьё</b>',
     ...summary.materials.map((m) => `• ${esc(m.name)} — ${fmtQty(m.qty)} ${UNIT_LABEL[m.unit] || 'шт.'}`),
@@ -101,12 +108,12 @@ export function kitchenText(summary, { cost = true } = {}) {
   ].join('\n');
 }
 
-/* The day's confirmed orders — what a kitchen reminder makes its list from,
-   whether it is sent by hand or by the schedule. */
+/* The day's confirmed orders and replacements — what a kitchen reminder makes
+   its list from, whether it is sent by hand or by the schedule. */
 export async function confirmedOrderIds(day = localDate()) {
   const { data, error } = await db
     .from('orders').select('id')
-    .eq('status', 'confirmed').eq('kind', 'order').eq('service_date', day);
+    .eq('status', 'confirmed').in('kind', ORDER_KINDS).eq('service_date', day);
   if (error) throw error;
   return (data || []).map((o) => o.id);
 }

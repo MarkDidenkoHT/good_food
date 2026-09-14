@@ -9,6 +9,7 @@ import { sendMessage, notifyAdmins, kitchenGroupId, botConfigured, setWebhook, e
 import { uploadImage, removeImage, signedUrl, MAX_BYTES, extFor } from '../lib/storage.js';
 import { ORDER_DEFAULTS, parseTime } from '../lib/orders.js';
 import { summarise, kitchenText, confirmedOrderIds, useMaterialCost, roundQty } from '../lib/kitchen.js';
+import { CONTACT_DEFAULTS, normaliseUsername } from '../lib/contact.js';
 import { normaliseUrl, forgetPublicUrl } from '../lib/publicUrl.js';
 import { importFromSupabase, supabaseConfigured, IMPORT_FLAG } from '../lib/supabaseImport.js';
 import { listBackups, createBackup, restoreBackup } from '../lib/backups.js';
@@ -447,7 +448,8 @@ adminRouter.post('/orders/:id/decide', async (req, res) => {
   }
 
   // FrontPad goes first, as in the old script: if it refuses, the order is
-  // NOT confirmed and the admin sees why. Off / return / simulation pass.
+  // NOT confirmed and the admin sees why. Off, simulation and anything that is
+  // not an order (a replacement) pass.
   let frontpad = null;
   if (status === 'confirmed') {
     frontpad = await pushOrder(current);
@@ -484,7 +486,7 @@ adminRouter.post('/orders/:id/frontpad', async (req, res) => {
   const result = await pushOrder(order);
   if (!result.ok) return res.status(502).json({ error: result.error });
   if (result.skipped) {
-    const why = { disabled: 'Передача в FrontPad выключена', return: 'Передача возвратов выключена' };
+    const why = { disabled: 'Передача в FrontPad выключена', not_order: 'В FrontPad передаются только заказы' };
     return res.status(409).json({ error: why[result.skipped] || 'Пропущено' });
   }
   res.json(result);
@@ -897,7 +899,8 @@ const SETTING_DEFAULTS = {
   frontpad: FRONTPAD_DEFAULTS,
   auth: { allow_owner_reset: false },
   design: { background_path: null },
-  server: { public_url: '' }
+  server: { public_url: '' },
+  contact: CONTACT_DEFAULTS
 };
 
 adminRouter.get('/settings', async (req, res) => {
@@ -955,6 +958,23 @@ adminRouter.put('/settings/notifications', async (req, res) => {
   res.json({ ok: true, value });
 });
 
+/* «Связаться с менеджером» in the mini-app opens a chat with this Telegram
+   account. Blank takes the button away. */
+adminRouter.put('/settings/contact', async (req, res) => {
+  const username = normaliseUsername(req.body?.manager_username);
+  if (username === null) {
+    return res.status(400).json({
+      error: 'Укажите имя пользователя Telegram: латиница, цифры и «_», от 5 до 32 символов'
+    });
+  }
+  const value = { manager_username: username };
+  const { error } = await db.from('app_settings').upsert({
+    key: 'contact', value, updated_at: new Date().toISOString()
+  });
+  if (error) return dbError(res, error);
+  res.json({ ok: true, value });
+});
+
 /* Whether materials carry a cost at all. Off, the panel stops asking for it
    and nothing prints it; costs already entered stay stored. */
 adminRouter.put('/settings/materials', async (req, res) => {
@@ -973,8 +993,10 @@ adminRouter.put('/settings/orders', async (req, res) => {
   const { data: current } = await db
     .from('app_settings').select('value').eq('key', 'orders').maybeSingle();
   const value = { ...SETTING_DEFAULTS.orders, ...(current?.value || {}) };
+  // left behind by the removed «Оформление возврата» setting
+  delete value.returns_from_history;
 
-  for (const key of ['allow_edit_confirmed', 'allow_delete_new', 'returns_from_history',
+  for (const key of ['allow_edit_confirmed', 'allow_delete_new',
                      'cutoff_enabled', 'lock_after_cutoff']) {
     if (key in req.body) value[key] = !!req.body[key];
   }
@@ -1005,8 +1027,9 @@ adminRouter.put('/settings/frontpad', async (req, res) => {
   const value = { ...SETTING_DEFAULTS.frontpad, ...(current?.value || {}) };
   delete value.mode;
   delete value.batch_time;
+  delete value.send_returns;       // returns are no longer sent at all
 
-  for (const key of ['enabled', 'simulation', 'verbose', 'send_returns']) {
+  for (const key of ['enabled', 'simulation', 'verbose']) {
     if (key in req.body) value[key] = !!req.body[key];
   }
   if ('delivery_time' in req.body) {
@@ -1137,9 +1160,6 @@ function itemError(res, error) {
   if (error?.code === '23505' && String(error.message).includes('items_frontpad_id_key')) {
     return res.status(400).json({ error: 'Этот артикул FrontPad уже привязан к другой позиции' });
   }
-  if (error?.code === '23505' && String(error.message).includes('items_frontpad_return_id_key')) {
-    return res.status(400).json({ error: 'Этот артикул возврата FrontPad уже привязан к другой позиции' });
-  }
   return dbError(res, error);
 }
 
@@ -1149,14 +1169,11 @@ function pickItem(b = {}) {
   if ('item_category' in b) out.item_category = b.item_category?.trim() || null;
   if ('item_cost' in b) out.item_cost = toMoney(b.item_cost);
   if ('image_path' in b) out.image_path = b.image_path?.trim() || null;
-  // false takes the item off the order list; it stays orderable-for-return
+  // false takes the item out of both baskets, orders and replacements
   if ('available' in b) out.available = b.available !== false;
   // FrontPad article. Free-form string; blank means "not mapped to FrontPad"
   // and is stored as NULL so the unique index ignores it.
   if ('frontpad_id' in b) out.frontpad_id = String(b.frontpad_id ?? '').trim() || null;
-  if ('frontpad_return_id' in b) {
-    out.frontpad_return_id = String(b.frontpad_return_id ?? '').trim() || null;
-  }
   if ('materials' in b) {
     // store a {id, name} snapshot so an item still reads correctly if a
     // material is later renamed or removed
