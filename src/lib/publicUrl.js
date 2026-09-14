@@ -5,7 +5,7 @@ import { db } from './db.js';
    operators' group link to.
 
    It used to be PUBLIC_URL on Render. A self-hosted server gets its address
-   from a tunnel or a router, and that address can change, so it is set in the
+   from a reverse proxy, and that address can change, so it is set in the
    panel (Настройки → Адрес сервера) and kept in app_settings under 'server'. */
 
 const TTL_MS = 30_000;

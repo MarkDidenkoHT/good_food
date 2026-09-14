@@ -30,7 +30,7 @@ services:
       UPLOADS_DIR: /data/uploads
       BACKUP_DIR: /data/backups
       PORT: "3000"
-    # only this computer; the internet comes in through the tunnel below
+    # loopback only; the internet comes in through the https reverse proxy
     ports:
       - "127.0.0.1:${APP_PORT:-3000}:3000"
     volumes:
@@ -39,18 +39,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-
-  # Optional: a Cloudflare Tunnel gives the server an https address without
-  # opening ports on the router.  docker compose --profile tunnel up -d
-  tunnel:
-    image: cloudflare/cloudflared:latest
-    profiles: ["tunnel"]
-    restart: unless-stopped
-    command: tunnel --no-autoupdate run
-    environment:
-      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
-    depends_on:
-      - app
 
 volumes:
   pgdata:
