@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { db, dbError } from '../lib/db.js';
 import { verifyInitData } from '../lib/telegram.js';
 import { sign, cookieOpts, ADMIN_COOKIE, USER_COOKIE, requireAdmin, requireUser,
-         issueUserSession as issueSession } from '../lib/auth.js';
+         issueUserSession as issueSession, revokeSessions } from '../lib/auth.js';
 import { sendNewUserNotice } from '../lib/notices.js';
 import { CODE_RE, hashCode } from '../lib/companyCode.js';
 
@@ -75,6 +75,7 @@ function loadUser(chatId) {
   return db
     .from('users')
     .select('id, user_name, access, role, chat_id, tg_username, company_id, code_version, ' +
+            'admin_session_version, user_session_version, ' +
             'companies(id, company_name, access, code_version)')
     .eq('chat_id', chatId)
     .maybeSingle();
@@ -152,13 +153,14 @@ authRouter.post('/admin/login', async (req, res) => {
   await touch(user.id);
   res.cookie(
     ADMIN_COOKIE,
-    sign({ role: 'admin', id: user.id, name: user.user_name }, '12h'),
+    sign({ role: 'admin', id: user.id, name: user.user_name, sv: user.admin_session_version }, '12h'),
     cookieOpts(12 * 3600 * 1000)
   );
   res.json({ ok: true, id: user.id, user_name: user.user_name });
 });
 
-authRouter.post('/admin/logout', (req, res) => {
+authRouter.post('/admin/logout', async (req, res) => {
+  await revokeSessions(req.cookies?.[ADMIN_COOKIE], 'admin');
   res.clearCookie(ADMIN_COOKIE, { path: '/' });
   res.json({ ok: true });
 });
@@ -252,7 +254,7 @@ authRouter.post('/user/join', async (req, res) => {
       last_login: new Date().toISOString()
     })
     .eq('id', user.id)
-    .select('id, user_name, role, company_id, code_version')
+    .select('id, user_name, role, company_id, code_version, user_session_version')
     .single();
   if (uErr) return dbError(res, uErr);
 
@@ -273,7 +275,8 @@ authRouter.post('/user/join', async (req, res) => {
   res.json(publicUser(updated, company.company_name));
 });
 
-authRouter.post('/user/logout', (req, res) => {
+authRouter.post('/user/logout', async (req, res) => {
+  await revokeSessions(req.cookies?.[USER_COOKIE], 'user');
   res.clearCookie(USER_COOKIE, { path: '/' });
   res.json({ ok: true });
 });

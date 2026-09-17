@@ -54,6 +54,7 @@ appRouter.post('/company/rotate-code', async (req, res) => {
     user_name: req.user.name,
     company_id: req.user.company_id,
     role: req.user.company_role,
+    user_session_version: req.user.sv,
     code_version: company.code_version
   });
 
