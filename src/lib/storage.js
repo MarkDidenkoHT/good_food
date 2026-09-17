@@ -41,11 +41,20 @@ export function resolvePath(rel) {
 /* Random names rather than the item id: an image is uploaded before a new
    item has an id, and a random name means replacing a picture can never be
    served from a stale cache under the same URL. */
+/* The declared type is only a claim; the first bytes say what the file is. */
+const MAGIC = {
+  jpg: (b) => b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  png: (b) => b.length > 8 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+  gif: (b) => b.length > 6 && ['GIF87a', 'GIF89a'].includes(b.toString('latin1', 0, 6)),
+  webp: (b) => b.length > 12 && b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP'
+};
+
 export async function uploadImage(buffer, contentType, folder = 'items') {
   const ext = extFor(contentType);
   if (!ext) throw new Error('Поддерживаются JPEG, PNG, WebP и GIF');
   if (!buffer?.length) throw new Error('Пустой файл');
   if (buffer.length > MAX_BYTES) throw new Error('Файл больше 5 МБ');
+  if (!MAGIC[ext](buffer)) throw new Error('Файл не является изображением указанного типа');
 
   const rel = `${folder}/${crypto.randomUUID()}.${ext}`;
   const full = resolvePath(rel);

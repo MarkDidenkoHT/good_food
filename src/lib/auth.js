@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import { db } from './db.js';
 
 const SECRET = process.env.JWT_SECRET || 'dev-insecure-secret';
 export const ADMIN_COOKIE = 'gf_admin';
@@ -40,16 +41,45 @@ export function issueUserSession(res, user) {
   );
 }
 
-export function requireAdmin(req, res, next) {
+/* A token proves who signed in, not that they still may. Blocking, deleting,
+   demoting or moving someone has to take effect on their next request, not
+   when a 12-hour or 30-day cookie runs out — so every request reads the row. */
+function loadAccount(id) {
+  return db
+    .from('users')
+    .select('id, user_name, role, access, company_id, companies(access)')
+    .eq('id', id)
+    .maybeSingle();
+}
+
+export async function requireAdmin(req, res, next) {
   const claims = verify(req.cookies?.[ADMIN_COOKIE]);
   if (!claims || claims.role !== 'admin') return res.status(401).json({ error: 'Not authenticated' });
-  req.admin = claims;
+
+  const { data: user, error } = await loadAccount(claims.id);
+  if (error) return res.status(503).json({ error: 'Database unavailable' });
+  if (!user || user.role !== 'admin' || user.access === false || user.companies?.access === false) {
+    res.clearCookie(ADMIN_COOKIE, { path: '/' });
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+
+  req.admin = { ...claims, name: user.user_name };
   next();
 }
 
-export function requireUser(req, res, next) {
+export async function requireUser(req, res, next) {
   const claims = verify(req.cookies?.[USER_COOKIE]);
   if (!claims || claims.role !== 'user') return res.status(401).json({ error: 'Not authenticated' });
-  req.user = claims;
+
+  const { data: user, error } = await loadAccount(claims.id);
+  if (error) return res.status(503).json({ error: 'Database unavailable' });
+  if (!user || user.access === false || !user.company_id ||
+      user.company_id !== claims.company_id || user.companies?.access === false) {
+    res.clearCookie(USER_COOKIE, { path: '/' });
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+
+  // the role comes from the row, never the token: a demoted owner is demoted now
+  req.user = { ...claims, name: user.user_name, company_role: user.role };
   next();
 }
