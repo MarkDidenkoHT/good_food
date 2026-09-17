@@ -19,8 +19,7 @@ import { forgetPublicUrl } from './publicUrl.js';
        uploads/        the pictures
 
    Plain files rather than pg_dump, so a backup is the same thing with Docker
-   and without it, and restoring one is the same code that loads data from
-   Supabase. Backups older than 30 days are removed; the newest is always kept.
+   and without it. Backups older than 30 days are removed; the newest is always kept.
 
    Restoring saves the current data as a backup first, so a restore made by
    mistake can itself be undone. */
@@ -70,14 +69,13 @@ async function renameWhenFree(from, to) {
 
 /* ── one at a time ────────────────────────────────────────────────────── */
 
-/* A backup, a restore and a load from Supabase each read or replace
-   everything, so none of them may overlap. A second one is refused rather
+/* A backup and a restore each read or replace everything, so none of them may overlap. A second one is refused rather
    than queued: the admin who pressed the button should hear that something
    is already running. */
 let busy = false;
 
-export async function exclusive(fn) {
-  if (busy) throw refuse(409, 'Уже идёт резервное копирование, восстановление или загрузка — подождите');
+async function exclusive(fn) {
+  if (busy) throw refuse(409, 'Уже идёт резервное копирование или восстановление — подождите');
   busy = true;
   try {
     return await fn();
@@ -93,7 +91,7 @@ export const createBackup = (kind = 'manual') => exclusive(() => snapshot(kind))
 /* The backup itself, for callers already holding exclusive(). Written into a
    .partial folder and renamed at the end, so a backup that died halfway is
    never listed or restored. */
-export async function snapshot(kind, { protect = null } = {}) {
+async function snapshot(kind, { protect = null } = {}) {
   let id = `${stamp()}_${kind}`;
   // two backups of one kind in the same second would share a name
   while (await exists(path.join(BACKUP_ROOT, id))) {
@@ -164,7 +162,7 @@ async function copyUploads(src, dst, previous) {
 
 /* Relative paths of every file under `dir`, '/'-separated; nothing when the
    folder does not exist yet. */
-export async function* walk(dir, rel = '') {
+async function* walk(dir, rel = '') {
   let entries;
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });

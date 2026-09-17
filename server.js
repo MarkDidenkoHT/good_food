@@ -12,7 +12,6 @@ import { filesRouter } from './src/routes/files.js';
 import { pool } from './src/lib/db.js';
 import { migrate } from './src/lib/migrate.js';
 import { startScheduler, stopScheduler } from './src/lib/scheduler.js';
-import { importIfEmpty } from './src/lib/supabaseImport.js';
 import { ensureInitialAdmin } from './src/lib/initialAdmin.js';
 import { backfillCodeHashes, warnAboutPepper } from './src/lib/companyCode.js';
 
@@ -69,17 +68,9 @@ const port = process.env.PORT || 3000;
 const server = app.listen(port, () => console.log(`[server] listening on :${port}`));
 startScheduler();
 
-// A new, empty database has nobody to sign in with. With the Supabase keys in
-// .env it loads by itself; after an error it stays empty and tries again at
-// the next start. Then ADMIN_CHAT_ID / ADMIN_PASSWORD make sure of an admin.
-(async () => {
-  try {
-    await importIfEmpty();
-  } catch (e) {
-    return console.error('[import] startup load failed:', e.message);
-  }
-  await ensureInitialAdmin().catch((e) => console.error('[admin] initial admin failed:', e.message));
-})();
+// A new, empty database has nobody to sign in with: ADMIN_CHAT_ID /
+// ADMIN_PASSWORD make sure of an admin.
+ensureInitialAdmin().catch((e) => console.error('[admin] initial admin failed:', e.message));
 
 // `docker compose stop` sends SIGTERM: finish what is in flight, then let go
 // of the database, well inside Docker's ten seconds

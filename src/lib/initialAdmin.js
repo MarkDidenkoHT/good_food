@@ -3,14 +3,14 @@ import { CODE_RE, hashCode } from './companyCode.js';
 
 /* The first admin, from .env.
 
-   A new database without a Supabase load has nobody to sign in with, and
+   A new database has nobody to sign in with, and
    admins can only be made from inside the panel. ADMIN_CHAT_ID and
    ADMIN_PASSWORD fix that: at start, if no user has that chat id yet, the
    server creates one as admin — in the company whose password is
    ADMIN_PASSWORD, or in a new company with that password.
 
    A chat id that is already here is never touched, so imported data and
-   whatever was changed in the panel win. Deleting that user and restarting
+   what was changed in the panel wins. Deleting that user and restarting
    brings them back, which doubles as a way back in. */
 
 const CHAT_RE = /^-?\d{1,20}$/;

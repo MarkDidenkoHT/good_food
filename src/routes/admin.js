@@ -11,7 +11,6 @@ import { ORDER_DEFAULTS, parseTime } from '../lib/orders.js';
 import { summarise, kitchenText, confirmedOrderIds, useMaterialCost, roundQty } from '../lib/kitchen.js';
 import { CONTACT_DEFAULTS, normaliseUsername } from '../lib/contact.js';
 import { normaliseUrl, forgetPublicUrl } from '../lib/publicUrl.js';
-import { importFromSupabase, supabaseConfigured, IMPORT_FLAG } from '../lib/supabaseImport.js';
 import { listBackups, createBackup, restoreBackup } from '../lib/backups.js';
 import { resolveAudience, normaliseAudience, deliver, recall, MAX_TEXT }
   from '../lib/broadcasts.js';
@@ -858,24 +857,7 @@ adminRouter.post('/reminders/:id/test', async (req, res) => {
   res.status(201).json({ ok: true, recipients: recipients.length });
 });
 
-/* ---------- loading from Supabase, backups ---------- */
-
-/* Once only. The flag the load writes (app_settings 'supabase_import') is what
-   takes the button away, and this checks it too; running it again on purpose
-   is scripts/import-supabase.js. */
-adminRouter.post('/supabase-import', async (req, res) => {
-  const { data: flag, error } = await db
-    .from('app_settings').select('value').eq('key', IMPORT_FLAG).maybeSingle();
-  if (error) return dbError(res, error, 500);
-  if (flag?.value?.done_at) return res.status(409).json({ error: 'Данные из Supabase уже загружены' });
-
-  try {
-    res.json({ ok: true, ...(await importFromSupabase()) });
-  } catch (e) {
-    console.error('[import] failed:', e);
-    res.status(e.status || 500).json({ error: e.message });
-  }
-});
+/* ---------- backups ---------- */
 
 adminRouter.get('/backups', async (req, res) => {
   try {
@@ -929,8 +911,6 @@ adminRouter.get('/settings', async (req, res) => {
   if (error) return dbError(res, error, 500);
   const out = structuredClone(SETTING_DEFAULTS);
   for (const row of data || []) out[row.key] = { ...out[row.key], ...row.value };
-  // what the «Данные из Supabase» card needs: can it run, and has it already
-  out[IMPORT_FLAG] = { configured: supabaseConfigured(), done_at: out[IMPORT_FLAG]?.done_at || null };
   res.json(out);
 });
 

@@ -3,7 +3,7 @@ import { backfillCodeHashes } from './companyCode.js';
 
 /* Every table of the app's data, and the two things done with all of them at
    once: reading them out (a backup) and putting a whole set back (restoring a
-   backup, or loading from Supabase).
+   backup).
 
    Parents come before children, so on the way in every foreign key finds its
    row. */
@@ -25,16 +25,6 @@ export const TABLES = [
 ];
 
 const JSON_TYPES = new Set(['json', 'jsonb']);
-
-/* The tables that already hold rows. */
-export async function tablesWithData() {
-  const out = [];
-  for (const [t] of TABLES) {
-    const { rows } = await pool.query(`select exists (select 1 from "${t}") as has`);
-    if (rows[0].has) out.push(t);
-  }
-  return out;
-}
 
 /* Every row of every table, as of one moment: a backup taken while an order
    is being placed has either all of it or none of it. */
@@ -59,25 +49,13 @@ export async function readAll() {
 /* Replaces everything with `data`, in one transaction: all of it lands or
    none of it does, and the running app never sees half.
 
-   `keepLocalSettings` holds on to the app_settings keys `data` does not have —
-   settings that exist only on this server, like Адрес сервера — so loading
-   from Supabase does not wipe them. `settings` are written last, inside the
-   same transaction.
-
    Columns `data` has and this schema does not are left out and reported;
    columns this schema has and `data` does not take their defaults. */
-export async function replaceAll(data, { keepLocalSettings = false, settings = [] } = {}) {
+export async function replaceAll(data) {
   const client = await pool.connect();
   try {
     await client.query('begin');
     const columns = await localColumns(client);
-
-    let kept = [];
-    if (keepLocalSettings) {
-      const incoming = new Set((data.app_settings || []).map((r) => r.key));
-      const { rows } = await client.query('select key, value from app_settings');
-      kept = rows.filter((r) => !incoming.has(r.key));
-    }
 
     await client.query(`truncate ${TABLES.map(([t]) => `"${t}"`).join(', ')} restart identity cascade`);
 
@@ -92,16 +70,9 @@ export async function replaceAll(data, { keepLocalSettings = false, settings = [
       }
     }
 
-    // Supabase and older backups hand over codes in clear text; hash them
-    // before this commits, or nobody could log in until the next restart.
+    // backups taken before codes were hashed hand them over in clear text;
+    // hash them before this commits, or nobody could log in until a restart
     await backfillCodeHashes(client);
-
-    for (const row of [...kept, ...settings]) {
-      await client.query(
-        `insert into app_settings (key, value, updated_at) values ($1, $2, now())
-         on conflict (key) do update set value = excluded.value, updated_at = now()`,
-        [row.key, JSON.stringify(row.value)]);
-    }
 
     await client.query('commit');
     return skipped;

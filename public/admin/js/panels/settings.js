@@ -98,7 +98,6 @@ function draw() {
   const publicUrl = settings.server?.public_url || '';
   const manager = settings.contact?.manager_username || '';
   const useCost = settings.materials?.use_cost !== false;
-  const sb = settings.supabase_import || {};
 
   body.innerHTML = '';
   const card = frag(`
@@ -118,20 +117,6 @@ function draw() {
         </div>
       </div>
     </div>
-
-    ${sb.done_at ? '' : `
-    <div class="card" style="margin-top:16px">
-      <div class="card__head"><div class="card__title">Данные из Supabase</div></div>
-      <div class="card__body">
-        <div class="field" style="margin-bottom:0">
-          <span class="field__label">Перенос данных</span>
-          <button class="btn btn--sm" id="sb-import" ${sb.configured ? '' : 'disabled'}>Загрузить данные из Supabase</button>
-          <p class="hint">${sb.configured
-            ? 'Заменяет все данные здесь данными из Supabase: пользователей, компании, позиции, заказы, рассылки и картинки. В Supabase ничего не меняется. После успешной загрузки эта карточка исчезнет.'
-            : 'В .env не заданы SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY.'}</p>
-        </div>
-      </div>
-    </div>`}
 
     <div class="card" style="margin-top:16px">
       <div class="card__head"><div class="card__title">Каталог в приложении</div></div>
@@ -507,7 +492,6 @@ function draw() {
   card.querySelector('#fp-test').onclick = runFpTest;
   card.querySelector('#fp-log-refresh').onclick = loadFpLog;
   card.querySelector('#bk-create').onclick = createBackupNow;
-  card.querySelector('#sb-import')?.addEventListener('click', confirmImport);
   wireBackups(card.querySelector('#bk-list'));
 
   body.append(card);
@@ -717,26 +701,13 @@ async function saveFrontpad(patch) {
   }
 }
 
-/* ── Supabase and backups ──────────────────────────────────────────── */
-
-function confirmImport() {
-  confirmDialog('Загрузить данные из Supabase',
-    'Все данные здесь будут заменены данными из Supabase. Текущие данные перед этим ' +
-    'сохранятся в резервную копию. Загрузка может занять пару минут.',
-    async () => {
-      const res = await api.post('/api/admin/supabase-import', {});
-      const r = res.rows || {};
-      toast(`Загружено: пользователей ${r.users ?? 0}, заказов ${r.orders ?? 0}, ` +
-            `картинок ${res.pictures?.copied ?? 0}`);
-      await load(true);
-    }, 'Загрузить');
-}
+/* ── backups ───────────────────────────────────────────────────────── */
 
 const KIND_LABEL = {
   daily: 'ежедневная',
   manual: 'вручную',
   'pre-restore': 'перед восстановлением',
-  'pre-import': 'перед загрузкой из Supabase'
+  'pre-import': 'перед загрузкой данных'   // older backups only; the import is gone
 };
 
 const backupWhen = (b) =>

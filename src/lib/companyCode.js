@@ -54,8 +54,8 @@ export function warnAboutPepper() {
 export const hashCode = (code) =>
   createHmac('sha256', pepper()).update(String(code).trim().toUpperCase()).digest('hex');
 
-/* Plaintext codes still arrive from outside: the Supabase import, and
-   backups taken before codes were hashed, both carry company_code. Whatever
+/* Plaintext codes can still arrive from outside: backups taken before codes
+   were hashed carry company_code. Whatever
    writes those rows calls this inside its own transaction (pass the client),
    so no company is ever committed with a code nobody can log in with. At
    start-up it runs on the pool as a safety net. A no-op when nothing is
