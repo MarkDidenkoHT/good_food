@@ -1,4 +1,5 @@
 import { pool } from './db.js';
+import { backfillCodeHashes } from './companyCode.js';
 
 /* Every table of the app's data, and the two things done with all of them at
    once: reading them out (a backup) and putting a whole set back (restoring a
@@ -90,6 +91,10 @@ export async function replaceAll(data, { keepLocalSettings = false, settings = [
                          coalesce((select max(id) from "${t}"), 0) + 1, false)`);
       }
     }
+
+    // Supabase and older backups hand over codes in clear text; hash them
+    // before this commits, or nobody could log in until the next restart.
+    await backfillCodeHashes(client);
 
     for (const row of [...kept, ...settings]) {
       await client.query(

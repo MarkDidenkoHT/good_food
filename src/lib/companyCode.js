@@ -54,20 +54,24 @@ export function warnAboutPepper() {
 export const hashCode = (code) =>
   createHmac('sha256', pepper()).update(String(code).trim().toUpperCase()).digest('hex');
 
-/* One pass, on the deploy that introduces the hash: fill it in from whatever
-   plaintext is still there, then empty the old column. Anything already
-   hashed is left alone, so this is a no-op on every later start. */
-export async function backfillCodeHashes() {
-  const { rows } = await pool.query(
+/* Plaintext codes still arrive from outside: the Supabase import, and
+   backups taken before codes were hashed, both carry company_code. Whatever
+   writes those rows calls this inside its own transaction (pass the client),
+   so no company is ever committed with a code nobody can log in with. At
+   start-up it runs on the pool as a safety net. A no-op when nothing is
+   left in clear text. */
+export async function backfillCodeHashes(client = pool) {
+  const { rows } = await client.query(
     'select id, company_code from companies where company_code is not null');
-  if (!rows.length) return;
+  if (!rows.length) return 0;
 
   for (const { id, company_code } of rows) {
-    await pool.query(
+    await client.query(
       'update companies set company_code_hash = $1, company_code = null where id = $2',
       [hashCode(company_code), id]);
   }
   console.log(`[code] hashed ${rows.length} company code(s) and cleared the plaintext`);
+  return rows.length;
 }
 
 const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
