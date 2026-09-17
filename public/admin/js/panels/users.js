@@ -259,7 +259,7 @@ function drawTabs() {
 function drawCompanies(wrap) {
   const q = query.trim().toLowerCase();
   const list = companies.filter((c) => !q ||
-    `${c.company_name || ''} ${c.company_code || ''}`.toLowerCase().includes(q));
+    (c.company_name || '').toLowerCase().includes(q));
 
   if (!list.length) {
     wrap.innerHTML = `<div class="card__body" style="color:var(--ink-3)">Ничего не найдено.</div>`;
@@ -280,7 +280,7 @@ function drawCompanies(wrap) {
         <tr>
           <td class="num">${c.id}</td>
           <td style="font-weight:700">${esc(c.company_name || '—')}</td>
-          <td><span class="code-cell" data-copy="${esc(c.company_code || '')}" style="cursor:pointer" title="Скопировать">${esc(c.company_code || '—')}</span></td>
+          <td><span class="code-cell" style="color:var(--ink-3)" title="Пароль не хранится — его можно только перевыпустить">••••••</span></td>
           <td class="num">${staff.length}</td>
           <td>${owner ? esc(owner.user_name || '—') : '<span class="pill pill--off">нет</span>'}</td>
           <td>${c.access !== false ? '<span class="pill pill--on">Открыт</span>' : '<span class="pill pill--off">Закрыт</span>'}</td>
@@ -335,11 +335,12 @@ function companyForm(company) {
           <p class="hint">Оставьте пустым — сгенерируем сами.</p>
         ` : `
           <div style="display:flex;gap:8px">
-            <input class="input input--code" id="c-code" readonly
-                   value="${esc(company.company_code || '')}">
+            <input class="input input--code" id="c-code" readonly value="••••••"
+                   style="color:var(--ink-3)">
             <button type="button" class="btn btn--danger" id="c-rotate">Перевыпустить</button>
           </div>
-          <p class="hint">Пароль меняется только перевыпуском: старый перестаёт
+          <p class="hint">Пароль хранится только в зашифрованном виде — посмотреть
+             его нельзя, забытый пароль перевыпускается. Старый перестаёт
              действовать сразу, и все сотрудники компании теряют доступ, пока
              не введут новый.</p>
         `}
@@ -358,7 +359,7 @@ function companyForm(company) {
           <span class="switch__track"></span>
         </label>
       </div>`,
-    onSubmit: async (d) => {
+    onSubmit: async (d, close) => {
       const payload = {
         company_name: d.company_name,
         phone: (d.phone || '').trim() || null,
@@ -367,8 +368,16 @@ function companyForm(company) {
       if (isNew) {
         const code = (d.company_code || '').trim();
         if (code) payload.company_code = code;
-        await api.post('/api/admin/companies', payload);
+        /* The answer carries the code, and nothing else ever will: it is
+           stored hashed, so this is the only time it can be shown. Close this
+           form first, then put the code up on its own — the two dialogs must
+           not be on screen at once. */
+        const created = await api.post('/api/admin/companies', payload);
+        close();
         toast('Компания создана');
+        await load();
+        showNewCode(created, created.company_code);
+        return false;                       // already closed
       } else {
         await api.patch(`/api/admin/companies/${company.id}`, payload);
         // a disabled select (no staff yet) sends nothing: leave the owner alone

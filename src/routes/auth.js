@@ -4,7 +4,7 @@ import { verifyInitData } from '../lib/telegram.js';
 import { sign, cookieOpts, ADMIN_COOKIE, USER_COOKIE, requireAdmin, requireUser,
          issueUserSession as issueSession } from '../lib/auth.js';
 import { sendNewUserNotice } from '../lib/notices.js';
-import { CODE_RE } from '../lib/companyCode.js';
+import { CODE_RE, hashCode } from '../lib/companyCode.js';
 
 export const authRouter = Router();
 
@@ -80,26 +80,23 @@ function loadUser(chatId) {
     .maybeSingle();
 }
 
-/* CODE_RE has already kept ILIKE's wildcards out of `code`, so the pattern is
-   literal and this is a case-insensitive exact match.
+/* The code is never read back out of the database, so this looks the company
+   up by the hash of what was typed: an exact match on a unique index, and
+   nothing on the row an attacker could take away and use.
 
-   The comparison afterwards says the same thing a second time, against the
-   value that came back. It is redundant today and deliberately so: if the
-   charset is ever widened, a pattern that matched a company other than itself
-   still resolves to no company at all, rather than quietly becoming a key. */
+   This also retires the old ILIKE match. Matching a stored code with a
+   pattern meant the wildcards `_` and `%` had to be kept out of the alphabet,
+   or a code of six underscores would have matched every company in the table;
+   a hash has no pattern in it to interpret. CODE_RE stays as input
+   validation — it still says what a code an admin types may look like. */
 async function loadCompany(code) {
   const { data, error } = await db
     .from('companies')
-    .select('id, company_name, access, code_version, company_code')
-    .ilike('company_code', code)
+    .select('id, company_name, access, code_version')
+    .eq('company_code_hash', hashCode(code))
     .maybeSingle();
   if (error) return { data: null, error };
-
-  if (!data || String(data.company_code).toLowerCase() !== code.toLowerCase()) {
-    return { data: null, error: null };
-  }
-  const { company_code, ...company } = data;
-  return { data: company, error: null };
+  return { data: data || null, error: null };
 }
 
 /* The company has moved on to a newer code than this user last typed. They

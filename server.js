@@ -14,6 +14,7 @@ import { migrate } from './src/lib/migrate.js';
 import { startScheduler, stopScheduler } from './src/lib/scheduler.js';
 import { importIfEmpty } from './src/lib/supabaseImport.js';
 import { ensureInitialAdmin } from './src/lib/initialAdmin.js';
+import { backfillCodeHashes, warnAboutPepper } from './src/lib/companyCode.js';
 
 // without it sessions would be signed with a key anyone can read in the source
 if (!process.env.JWT_SECRET) {
@@ -54,6 +55,11 @@ app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 // the schema has to be in place before the first request or tick reads it
 try {
   await migrate();
+  /* Right after the migration that adds the hash column and before anything
+     can serve a login: hash whatever plaintext codes the table still holds,
+     and empty them. A no-op once it has run. */
+  warnAboutPepper();
+  await backfillCodeHashes();
 } catch (e) {
   console.error('[db] migration failed:', e.message);
   process.exit(1);

@@ -1,5 +1,5 @@
 import { pool } from './db.js';
-import { CODE_RE } from './companyCode.js';
+import { CODE_RE, hashCode } from './companyCode.js';
 
 /* The first admin, from .env.
 
@@ -32,12 +32,17 @@ export async function ensureInitialAdmin() {
     const { rows: users } = await client.query('select id from users where chat_id = $1', [chatId]);
     if (users.length) return await client.query('rollback');
 
+    /* ADMIN_PASSWORD is a company code like any other, so it is matched and
+       stored the same way: by hash, never in the table in the clear. It does
+       still sit in .env in the clear — that file is the server's own secret
+       store, and this variable only matters until the first admin exists. */
+    const codeHash = hashCode(code);
     let { rows: [company] } = await client.query(
-      'select id, code_version from companies where lower(company_code) = lower($1)', [code]);
+      'select id, code_version from companies where company_code_hash = $1', [codeHash]);
     if (!company) {
       ({ rows: [company] } = await client.query(
-        `insert into companies (company_name, company_code, access)
-         values ('Good Food', $1, true) returning id, code_version`, [code]));
+        `insert into companies (company_name, company_code_hash, access)
+         values ('Good Food', $1, true) returning id, code_version`, [codeHash]));
     }
 
     await client.query(

@@ -16,7 +16,7 @@ import { listBackups, createBackup, restoreBackup } from '../lib/backups.js';
 import { resolveAudience, normaliseAudience, deliver, recall, MAX_TEXT }
   from '../lib/broadcasts.js';
 import { validate as validateReminder } from '../lib/reminders.js';
-import { randomCode, rotateCompanyCode, isValidCode } from '../lib/companyCode.js';
+import { randomCode, rotateCompanyCode, isValidCode, hashCode } from '../lib/companyCode.js';
 import express from 'express';
 
 export const adminRouter = Router();
@@ -300,32 +300,53 @@ adminRouter.delete('/items/:id', async (req, res) => {
 
 /* ---------- companies ---------- */
 
+/* Columns by name, not `*`. A select star here used to put every company's
+   code into every admin's browser on every visit to the panel; there is no
+   plaintext left to leak now, but the hash is a credential's shadow and has
+   no business leaving the server either. */
 adminRouter.get('/companies', async (req, res) => {
   const { data, error } = await db
-    .from('companies').select('*').order('id', { ascending: false });
+    .from('companies')
+    .select('id, created_at, updated_at, company_name, access, phone, ' +
+            'code_version, code_rotated_at')
+    .order('id', { ascending: false });
   if (error) return dbError(res, error, 500);
   res.json(data);
 });
 
+/* The one moment the code is legible.
+
+   It is hashed on the way into the table and cannot be read back, so this
+   answer is the only copy: the panel shows it once, and an admin who loses it
+   reissues rather than looks it up. */
 adminRouter.post('/companies', async (req, res) => {
-  const body = pickCompany(req.body, { allowCode: true });
+  const { company_code, ...body } = pickCompany(req.body, { allowCode: true });
   if (!body.company_name) return res.status(400).json({ error: 'Название обязательно' });
   /* A hand-typed code has to sit in the same alphabet the login accepts, or
-     it is a code nobody can ever enter — and the characters left out are the
-     ones that would make it match more than itself. See lib/companyCode.js. */
-  if (body.company_code && !isValidCode(body.company_code)) {
+     it is a code nobody can ever enter. See lib/companyCode.js. */
+  if (company_code && !isValidCode(company_code)) {
     return res.status(400).json({ error: 'Код: латиница, цифры и дефис, до 32 символов' });
   }
-  if (!body.company_code) body.company_code = randomCode(6);
-  const { data, error } = await db.from('companies').insert(body).select().single();
+  const code = company_code || randomCode(6);
+  body.company_code_hash = hashCode(code);
+
+  const { data, error } = await db
+    .from('companies').insert(body)
+    .select('id, company_name, access, phone, code_version').single();
+  if (error?.code === '23505' && String(error.message).includes('companies_company_code_hash_key')) {
+    return res.status(409).json({ error: 'Этот пароль уже занят другой компанией' });
+  }
   if (error) return dbError(res, error);
-  res.status(201).json(data);
+  res.status(201).json({ ...data, company_code: code });
 });
 
 adminRouter.patch('/companies/:id', async (req, res) => {
   const patch = { ...pickCompany(req.body), updated_at: new Date().toISOString() };
   const { data, error } = await db
-    .from('companies').update(patch).eq('id', req.params.id).select().single();
+    .from('companies').update(patch).eq('id', req.params.id)
+    .select('id, created_at, updated_at, company_name, access, phone, ' +
+            'code_version, code_rotated_at')
+    .single();
   if (error) return dbError(res, error);
   res.json(data);
 });

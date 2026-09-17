@@ -1,4 +1,5 @@
-import { db } from './db.js';
+import { createHmac } from 'node:crypto';
+import { db, pool } from './db.js';
 import { USER_COOKIE } from './auth.js';
 import { announceCodeRotated } from './notices.js';
 
@@ -15,6 +16,60 @@ import { announceCodeRotated } from './notices.js';
    Only ordering stops. For the blunt version — everybody out, nobody back —
    companies.access is still the switch. */
 
+/* The code, stored so that the database cannot give it back.
+
+   companies.company_code_hash is all that is kept. A code is matched by
+   hashing what was typed and looking for that hash, so the comparison never
+   touches a stored secret and a dump of the table yields nothing anybody can
+   type in.
+
+   Keyed, not per-row salted. Login has to find a company *by* the code
+   offered, with no id to look it up by first; a per-row salt would mean one
+   slow hash against every company on every attempt. An HMAC under a pepper
+   that lives in the environment rather than the database stays a single
+   indexed lookup, and an attacker holding only the table has no key to
+   grind against. Guessing online is what the attempt limiter in
+   routes/auth.js is for.
+
+   The pepper is CODE_PEPPER, or JWT_SECRET when that is unset. Either one
+   changing makes every stored hash unmatchable — the codes are not
+   recoverable, so every company would have to be reissued. Hence the warning
+   below: rotating JWT_SECRET to expire sessions is a normal thing to do, and
+   it must not quietly lock everyone out. */
+function pepper() {
+  const p = process.env.CODE_PEPPER || process.env.JWT_SECRET;
+  if (!p) throw new Error('neither CODE_PEPPER nor JWT_SECRET is set — cannot hash company codes');
+  return p;
+}
+
+export function warnAboutPepper() {
+  if (!process.env.CODE_PEPPER) {
+    console.warn('[code] CODE_PEPPER is not set — company codes are keyed to JWT_SECRET. ' +
+                 'Changing JWT_SECRET will require reissuing every company code.');
+  }
+}
+
+/* Upper-cased first: the code has always been matched case-insensitively,
+   and a hash has no ILIKE to do that with. */
+export const hashCode = (code) =>
+  createHmac('sha256', pepper()).update(String(code).trim().toUpperCase()).digest('hex');
+
+/* One pass, on the deploy that introduces the hash: fill it in from whatever
+   plaintext is still there, then empty the old column. Anything already
+   hashed is left alone, so this is a no-op on every later start. */
+export async function backfillCodeHashes() {
+  const { rows } = await pool.query(
+    'select id, company_code from companies where company_code is not null');
+  if (!rows.length) return;
+
+  for (const { id, company_code } of rows) {
+    await pool.query(
+      'update companies set company_code_hash = $1, company_code = null where id = $2',
+      [hashCode(company_code), id]);
+  }
+  console.log(`[code] hashed ${rows.length} company code(s) and cleared the plaintext`);
+}
+
 const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 export function randomCode(len = 6) {
@@ -25,16 +80,12 @@ export function randomCode(len = 6) {
 
 /* What a company code may be made of, and the one place that says so.
 
-   A code is matched case-insensitively, with ILIKE — and in ILIKE `_` is the
-   single-character wildcard and `%` the multi-character one. A code of six
-   underscores would otherwise match every six-character code in the table,
-   which turns the credential into a skeleton key and the login into an oracle
-   for reading the real codes back one character at a time.
-
-   Escaping the pattern would work; keeping the wildcards out of the alphabet
-   is better, because then there is nothing left in a valid code for ILIKE to
-   interpret and no escaping to get wrong later. randomCode has never produced
-   one of these — this is about codes an admin types in by hand. */
+   Codes used to be matched with ILIKE, where `_` and `%` are wildcards: a
+   code of six underscores matched every six-character code in the table,
+   which made the credential a skeleton key. Matching on a hash leaves no
+   pattern to interpret and settles that on its own — this now simply keeps
+   a hand-typed code inside the alphabet both logins accept, so that nobody
+   is handed a code they cannot enter. */
 export const CODE_RE = /^[A-Za-z0-9-]{1,32}$/;
 
 export const isValidCode = (code) => CODE_RE.test(String(code ?? '').trim());
@@ -106,7 +157,7 @@ export async function rotateCompanyCode(companyId, { actorName, keepUserId = nul
 
   const version = (company.code_version || 1) + 1;
 
-  /* Six characters collide about never, but company_code is unique and a
+  /* Six characters collide about never, but the hash is unique and a
      rotation refused over a coin flip would be a baffling thing to explain
      to someone trying to lock their company down. */
   let saved = null;
@@ -116,13 +167,13 @@ export async function rotateCompanyCode(companyId, { actorName, keepUserId = nul
     const { data, error: uErr } = await db
       .from('companies')
       .update({
-        company_code: candidate,
+        company_code_hash: hashCode(candidate),
         code_version: version,
         code_rotated_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       })
       .eq('id', id)
-      .select('id, company_name, company_code, code_version')
+      .select('id, company_name, code_version')
       .single();
 
     if (uErr) {
