@@ -4,19 +4,20 @@
 
 **Стек:** Node.js 24, PostgreSQL 17, Docker Compose. Сервер, база, картинки, резервные копии и расписание работают в контейнерах.
 
-## Чек-лист первого запуска
+## Обновление этой версии
 
-Система ещё не работает в продакшене. Данные из прежней версии уже перенесены: в базе есть администратор и несколько тестовых пользователей и компаний — их можно удалить в админ-панели перед запуском.
+Обычный редеплой контейнера `app`: база, картинки и резервные копии остаются в томах Docker.
 
-1. Сервер с Docker и домен с HTTPS-прокси — см. «Требования».
-2. `cp .env.example .env` и заполнить. Обязательно сгенерировать **до первого запуска**:
-   - `JWT_SECRET` — `openssl rand -hex 32`;
-   - `CODE_PEPPER` — `openssl rand -hex 32`, отдельное значение. **После создания компаний не менять.**
-3. Только для новой пустой базы: `ADMIN_CHAT_ID` + `ADMIN_PASSWORD` — см. «Первый администратор».
-4. `docker compose up -d`, проверить `docker compose ps` и `docker compose logs app` — см. «Что должно быть в логе».
-5. Войти в `/admin`, задать адрес сервера, настроить кнопку меню бота — см. «Адрес сервера и Telegram».
-6. Проверить вход в мини-приложение из Telegram.
-7. Сохранить `.env` в надёжном месте (менеджер паролей). Если `CODE_PEPPER` потерян, пароли всех компаний придётся перевыпустить.
+1. Добавить в существующий `.env` строку `CODE_PEPPER=` со значением из `openssl rand -hex 32`. **Сделать это до редеплоя** — при старте пароли компаний хешируются этим ключом.
+2. `git pull && docker compose up -d --build`
+3. В логе (`docker compose logs app`) должно быть:
+   ```
+   [db] applying 002_hash_company_codes.sql
+   [db] applying 003_drop_supabase_import_flag.sql
+   [code] hashed N company code(s) and cleared the plaintext
+   [server] listening on :3000
+   ```
+4. Прежние пароли компаний продолжают работать. Посмотреть их в панели больше нельзя — только перевыпустить (см. «Пароли компаний»).
 
 ## Требования
 
@@ -94,16 +95,16 @@ docker compose ps       # оба контейнера должны быть heal
 
 ## Что должно быть в логе
 
-`docker compose logs app` при нормальном запуске:
+`docker compose logs app` при обычном запуске:
 
 ```
-[db] applying 001_init.sql                 только на новой базе
-[db] applying 002_hash_company_codes.sql   только на новой базе
-[admin] created admin with chat id …       если заданы ADMIN_CHAT_ID / ADMIN_PASSWORD
+[scheduler] reminders tick every 5 minutes
 [server] listening on :3000
 ```
 
-Предупреждение `[code] CODE_PEPPER is not set` означает, что `CODE_PEPPER` не задан — добавьте его в `.env` **до** создания компаний.
+Строки `[db] applying …` появляются, только когда в обновлении есть новые миграции.
+
+Предупреждение `[code] CODE_PEPPER is not set` означает, что `CODE_PEPPER` не задан в `.env`.
 
 ## Эксплуатация
 
