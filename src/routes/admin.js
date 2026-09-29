@@ -16,6 +16,9 @@ import { resolveAudience, normaliseAudience, deliver, recall, MAX_TEXT }
   from '../lib/broadcasts.js';
 import { validate as validateReminder } from '../lib/reminders.js';
 import { randomCode, rotateCompanyCode, isValidCode, hashCode } from '../lib/companyCode.js';
+import { membershipsByUser, setMemberships, setOwner, setMembershipRole, isMember,
+         repointOrphans, activate } from '../lib/membership.js';
+import { AUTH_DEFAULTS, authSettings } from '../lib/authSettings.js';
 import express from 'express';
 
 export const adminRouter = Router();
@@ -31,7 +34,17 @@ adminRouter.get('/users', async (req, res) => {
   if (q) query = query.ilike('user_name', `%${q}%`);
   const { data, error } = await query;
   if (error) return dbError(res, error, 500);
-  res.json(data);
+
+  /* Every company this person belongs to, not only the one they are signed
+     in to. `companies` (the embed) stays what it always was — the signed-in
+     one — so nothing that reads it has to change. */
+  let byUser = {};
+  try {
+    byUser = await membershipsByUser((data || []).map((u) => u.id));
+  } catch (e) {
+    return dbError(res, e, 500);
+  }
+  res.json((data || []).map((u) => ({ ...u, memberships: byUser[u.id] || [] })));
 });
 
 adminRouter.post('/users', async (req, res) => {
@@ -44,14 +57,62 @@ adminRouter.post('/users', async (req, res) => {
   if (body.role === 'admin' && !body.chat_id) {
     return res.status(400).json({ error: 'Администратору нужен chat_id для входа' });
   }
-  if (body.role === 'admin' && !body.company_id) {
+  // a creation that names no company creates somebody with none, which is
+  // what pressing /start and nothing else leaves behind too
+  const wanted = companyIds(req.body, body) || [];
+  if (body.role === 'admin' && !wanted.length) {
     return res.status(400).json({ error: 'Администратору нужна компания — её код он вводит при входе' });
   }
+
+  // company_id is the company they are signed in to; the first named one is
+  // where a new user starts
+  body.company_id = wanted[0] ?? null;
   const { data, error } = await db
     .from('users').insert(await stampCodeVersion(body)).select().single();
   if (error) return userError(res, error);
-  res.status(201).json(data);
+
+  try {
+    await saveMemberships(data, wanted, body.role);
+  } catch (e) {
+    return dbError(res, e, 500);
+  }
+  res.status(201).json({ ...data, memberships: (await membershipsByUser([data.id]))[data.id] || [] });
 });
+
+/* The set of companies the form is saving, as ids.
+
+   A form that says nothing about companies changes nothing — the panel is
+   not the only thing that calls this API, and a PATCH of somebody's name
+   must not empty their roster. `company_ids` is the new way to say it;
+   `company_id` on its own still means exactly one company, which is what
+   every older caller meant by it. */
+function companyIds(raw = {}, picked = {}) {
+  if (Array.isArray(raw.company_ids)) {
+    return [...new Set(raw.company_ids.map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+  }
+  if ('company_id' in picked) return picked.company_id ? [picked.company_id] : [];
+  return null;                       // not mentioned: leave the roster alone
+}
+
+/* Writes the roster, then makes sure the user is signed in to one of the
+   companies on it. An admin taking somebody out of the company they were
+   working in has to land them somewhere, or they are left holding a session
+   for a company they no longer belong to. */
+async function saveMemberships(user, wanted, role) {
+  if (wanted === null) return;
+  await setMemberships(user.id, wanted);
+
+  /* The role on the user form is the role at the company they are signed in
+     to — owning one company says nothing about the others, and the owner of
+     each is named on the companies tab. */
+  const active = wanted.includes(user.company_id) ? user.company_id : wanted[0] ?? null;
+  if (active && (role === 'owner' || role === 'employee')) {
+    await setMembershipRole(user.id, active, role);
+  }
+
+  if (active && active !== user.company_id) await activate(user.id, active);
+  if (!wanted.length) await repointOrphans();
+}
 
 adminRouter.patch('/users/:id', async (req, res) => {
   const patch = pickUser(req.body);
@@ -91,9 +152,13 @@ adminRouter.patch('/users/:id', async (req, res) => {
   if (patch.role === 'admin' && 'chat_id' in patch && patch.chat_id === null) {
     return res.status(400).json({ error: 'Администратору нужен chat_id для входа' });
   }
-  if (patch.role === 'admin' && 'company_id' in patch && patch.company_id === null) {
+  const wanted = companyIds(req.body, patch);
+  if (patch.role === 'admin' && wanted !== null && !wanted.length) {
     return res.status(400).json({ error: 'Администратору нужна компания — её код он вводит при входе' });
   }
+  /* company_id follows the roster rather than the form: it is the company
+     they are signed in to, and it has to be one they are still in. */
+  if (wanted !== null) delete patch.company_id;
   const demoted = (patch.role && patch.role !== 'admin') || patch.access === false;
   if (demoted && await isLastAdmin(req.params.id)) {
     return res.status(409).json({ error: 'Нельзя снять права у последнего администратора' });
@@ -101,6 +166,12 @@ adminRouter.patch('/users/:id', async (req, res) => {
   const { data, error } = await db
     .from('users').update(await stampCodeVersion(patch)).eq('id', req.params.id).select().single();
   if (error) return userError(res, error);
+
+  try {
+    await saveMemberships(data, wanted, patch.role);
+  } catch (e) {
+    return dbError(res, e, 500);
+  }
 
   // a rebind is the one edit here that changes who can sign in as this user,
   // so it goes on the record even when it was entirely legitimate
@@ -118,8 +189,11 @@ ${tgEsc(rebind.name || `#${req.params.id}`)}
   }
 
   // the group post is the operators' worklist — keep it current
-  refreshUserNotice(data).catch((e) => console.error('[notices]', e));
-  res.json(data);
+  const { data: fresh } = await db
+    .from('users').select('*, companies(company_name)').eq('id', req.params.id).maybeSingle();
+  const saved = fresh || data;
+  refreshUserNotice(saved).catch((e) => console.error('[notices]', e));
+  res.json({ ...saved, memberships: (await membershipsByUser([saved.id]))[saved.id] || [] });
 });
 
 adminRouter.delete('/users/:id', async (req, res) => {
@@ -354,7 +428,7 @@ adminRouter.patch('/companies/:id', async (req, res) => {
    held it; null leaves the company without one. Admin rows are never touched:
    admin is not a company role. */
 adminRouter.put('/companies/:id/owner', async (req, res) => {
-  const companyId = String(req.params.id);
+  const companyId = Number(req.params.id);
   const raw = req.body?.user_id;
   const userId = raw === null || raw === undefined || raw === '' ? null : Number(raw);
   if (userId !== null && !Number.isFinite(userId)) {
@@ -363,9 +437,11 @@ adminRouter.put('/companies/:id/owner', async (req, res) => {
 
   if (userId !== null) {
     const { data: user, error } = await db
-      .from('users').select('id, company_id, role').eq('id', userId).maybeSingle();
+      .from('users').select('id, role').eq('id', userId).maybeSingle();
     if (error) return dbError(res, error, 500);
-    if (!user || String(user.company_id) !== companyId) {
+    // membership, not the signed-in company: an owner of this company may be
+    // working in another of theirs at the moment
+    if (!user || !(await isMember(userId, companyId))) {
       return res.status(400).json({ error: 'Владелец должен быть сотрудником этой компании' });
     }
     if (user.role === 'admin') {
@@ -373,16 +449,10 @@ adminRouter.put('/companies/:id/owner', async (req, res) => {
     }
   }
 
-  let demote = db.from('users')
-    .update({ role: 'employee' })
-    .eq('company_id', companyId).eq('role', 'owner');
-  if (userId !== null) demote = demote.neq('id', userId);
-  const { error: dErr } = await demote;
-  if (dErr) return dbError(res, dErr);
-
-  if (userId !== null) {
-    const { error: oErr } = await db.from('users').update({ role: 'owner' }).eq('id', userId);
-    if (oErr) return dbError(res, oErr);
+  try {
+    await setOwner(companyId, userId);
+  } catch (e) {
+    return dbError(res, e, 500);
   }
   res.json({ ok: true, owner_id: userId });
 });
@@ -402,9 +472,16 @@ adminRouter.post('/companies/:id/rotate-code', async (req, res) => {
 });
 
 adminRouter.delete('/companies/:id', async (req, res) => {
-  // users and orders keep their rows; the FKs null out the link
+  // users and orders keep their rows; the FKs null out the link, and the
+  // memberships of the company that is gone go with it
   const { error } = await db.from('companies').delete().eq('id', req.params.id);
   if (error) return dbError(res, error);
+  // whoever was signed in there lands in another of their companies, or none
+  try {
+    await repointOrphans();
+  } catch (e) {
+    return dbError(res, e, 500);
+  }
   res.json({ ok: true });
 });
 
@@ -900,7 +977,7 @@ const SETTING_DEFAULTS = {
   materials: { use_cost: true },
   orders: ORDER_DEFAULTS,
   frontpad: FRONTPAD_DEFAULTS,
-  auth: { allow_owner_reset: false },
+  auth: AUTH_DEFAULTS,
   design: { background_path: null },
   server: { public_url: '' },
   contact: CONTACT_DEFAULTS
@@ -938,11 +1015,27 @@ adminRouter.put('/settings/server', async (req, res) => {
   res.json({ ok: true, value, webhook });
 });
 
-/* Whether a company owner may reissue their own code, or must ring a
-   manager to have it done. Off by default: a kill switch for a whole company
-   is something to hand over on purpose, not to find already handed over. */
+/* The two ways in that an operator can widen.
+
+   allow_owner_reset — whether a company owner may reissue their own code, or
+   must ring a manager to have it done. Off by default: a kill switch for a
+   whole company is something to hand over on purpose, not to find already
+   handed over.
+
+   allow_multi_company_join — whether somebody who already belongs to a
+   company may type another company's code and be added to it as well. Off by
+   default: extra companies are the panel's to hand out, so a code that has
+   travelled between two customers adds nobody to anything. */
 adminRouter.put('/settings/auth', async (req, res) => {
-  const value = { allow_owner_reset: !!req.body?.allow_owner_reset };
+  // a form may send one switch or both; the other keeps its value
+  const current = await authSettings();
+  const value = { ...current };
+  if ('allow_owner_reset' in (req.body || {})) {
+    value.allow_owner_reset = !!req.body.allow_owner_reset;
+  }
+  if ('allow_multi_company_join' in (req.body || {})) {
+    value.allow_multi_company_join = !!req.body.allow_multi_company_join;
+  }
   const { error } = await db.from('app_settings').upsert({
     key: 'auth', value, updated_at: new Date().toISOString()
   });

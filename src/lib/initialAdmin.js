@@ -45,10 +45,15 @@ export async function ensureInitialAdmin() {
          values ('Good Food', $1, true) returning id, code_version`, [codeHash]));
     }
 
-    await client.query(
+    const { rows: [admin] } = await client.query(
       `insert into users (user_name, role, access, chat_id, company_id, code_version)
-       values ('Администратор', 'admin', true, $1, $2, $3)`,
+       values ('Администратор', 'admin', true, $1, $2, $3) returning id`,
       [chatId, company.id, company.code_version]);
+    // the roster, which is what the login checks the typed code against
+    await client.query(
+      `insert into user_companies (user_id, company_id, role, code_version)
+       values ($1, $2, 'employee', $3) on conflict do nothing`,
+      [admin.id, company.id, company.code_version]);
     await client.query('commit');
     console.log(`[admin] created admin with chat id ${chatId}`);
   } catch (e) {

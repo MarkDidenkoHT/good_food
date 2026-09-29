@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { db, pool } from './db.js';
+import { membership } from './membership.js';
 
 const SECRET = process.env.JWT_SECRET || 'dev-insecure-secret';
 export const ADMIN_COOKIE = 'gf_admin';
@@ -25,7 +26,14 @@ export function cookieOpts(maxAgeMs) {
 
 /* The mini-app session. Thirty days, and it carries `cv` — the generation of
    the company code it was issued against — so that reissuing the code can
-   invalidate every session of that company at once. See lib/companyCode.js. */
+   invalidate every session of that company at once. See lib/companyCode.js.
+
+   It also carries `company_id`, and that is the company the request is about:
+   a person may belong to several, and which one they are working in is a
+   property of this session rather than of the person. Switching companies
+   issues a new cookie; a tab left open on the previous one goes on working
+   there, because the token names a company the user really is a member of and
+   nothing about the other tab makes that untrue. */
 export function issueUserSession(res, user) {
   res.cookie(
     USER_COOKIE,
@@ -76,15 +84,30 @@ export async function requireUser(req, res, next) {
 
   const { data: user, error } = await loadAccount(claims.id);
   if (error) return res.status(503).json({ error: 'Database unavailable' });
-  if (!user || user.access === false || !user.company_id ||
-      user.company_id !== claims.company_id || user.companies?.access === false ||
+  if (!user || user.access === false || !claims.company_id ||
       claims.sv !== user.user_session_version) {
     res.clearCookie(USER_COOKIE, { path: '/' });
     return res.status(401).json({ error: 'Not authenticated' });
   }
 
-  // the role comes from the row, never the token: a demoted owner is demoted now
-  req.user = { ...claims, name: user.user_name, company_role: user.role };
+  /* The token says which company; the roster says whether that is still
+     true. Taking somebody out of a company has to end their session in it on
+     the next request, exactly as blocking them does. */
+  let seat;
+  try {
+    seat = await membership(user.id, claims.company_id);
+  } catch (e) {
+    console.error('[auth]', e);
+    return res.status(503).json({ error: 'Database unavailable' });
+  }
+  if (!seat || seat.access === false) {
+    res.clearCookie(USER_COOKIE, { path: '/' });
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+
+  // the role comes from the membership, never the token: a demoted owner is
+  // demoted now, and owning one company says nothing about another
+  req.user = { ...claims, name: user.user_name, company_role: seat.role };
   next();
 }
 

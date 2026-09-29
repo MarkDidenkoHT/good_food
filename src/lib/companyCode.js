@@ -191,18 +191,27 @@ export async function rotateCompanyCode(companyId, { actorName, keepUserId = nul
 
   cache.set(id, { version, at: Date.now() });
 
+  /* The stamp goes on the membership — this company's generation, not the
+     person's — and on users.code_version too while they are signed in here,
+     since that mirror is what their session was issued against. */
   if (keepUserId) {
-    await db.from('users').update({ code_version: version }).eq('id', keepUserId);
+    await pool.query(
+      'update user_companies set code_version = $1 where user_id = $2 and company_id = $3',
+      [version, keepUserId, id]);
+    await pool.query(
+      'update users set code_version = $1 where id = $2 and company_id = $3',
+      [version, keepUserId, id]);
   }
 
-  // Who to tell. A blocked account is not a silent failure to explain later,
-  // it is simply not a recipient.
-  const { data: staff } = await db
-    .from('users')
-    .select('id, user_name, chat_id, role')
-    .eq('company_id', id)
-    .not('chat_id', 'is', null)
-    .neq('access', false);
+  // Who to tell: everyone on this company's roster, whichever company they
+  // happen to be signed in to. A blocked account is not a silent failure to
+  // explain later, it is simply not a recipient.
+  const { rows: staff } = await pool.query(
+    `select u.id, u.user_name, u.chat_id, m.role
+       from user_companies m
+       join users u on u.id = m.user_id
+      where m.company_id = $1 and u.chat_id is not null and u.access is distinct from false`,
+    [id]);
 
   const everyone = staff || [];
   const keeper = keepUserId ? everyone.find((u) => u.id === keepUserId) || null : null;

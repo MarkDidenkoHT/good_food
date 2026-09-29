@@ -186,7 +186,9 @@ function drawComposer() {
         companies.map((c) => ({
           id: c.id,
           label: c.company_name || `#${c.id}`,
-          note: `${reachable.filter((u) => u.company_id === c.id).length} чел.`
+          // the roster, which is who the server will write to — not only
+          // those signed in to this company at the moment
+          note: `${reachable.filter((u) => inCompany(u, c.id)).length} чел.`
         })),
         draft.company_ids) : ''}
 
@@ -536,4 +538,12 @@ function removeRow(b) {
       await load();
     }
   );
+}
+
+/* A user belongs to every company on their roster; `company_id` is only the
+   one they are signed in to. Older responses carry no roster, so fall back. */
+function inCompany(user, companyId) {
+  return user?.memberships?.length
+    ? user.memberships.some((m) => m.id === companyId)
+    : user?.company_id === companyId;
 }

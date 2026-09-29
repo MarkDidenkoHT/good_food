@@ -1,4 +1,4 @@
-import { db } from './db.js';
+import { db, pool } from './db.js';
 import { sendMessage, editMessageText, adminGroupId, esc } from './telegram.js';
 import { publicUrl } from './publicUrl.js';
 
@@ -304,9 +304,13 @@ export async function announceOrderDecision(order) {
   if (ctx.user?.chat_id) targets.add(String(ctx.user.chat_id));
 
   if (await notifyOwnerEnabled()) {
-    const { data: owner } = await db
-      .from('users').select('chat_id')
-      .eq('company_id', order.company_id).eq('role', 'owner').maybeSingle();
+    // the owner *of this order's company*, which may not be the company that
+    // owner is signed in to at the moment
+    const { rows: owners } = await pool.query(
+      `select u.chat_id from user_companies m join users u on u.id = m.user_id
+        where m.company_id = $1 and m.role = 'owner' and u.chat_id is not null limit 1`,
+      [order.company_id]);
+    const owner = owners[0];
     // a Set keyed by chat id means the owner who placed the order is not
     // messaged twice
     if (owner?.chat_id) targets.add(String(owner.chat_id));

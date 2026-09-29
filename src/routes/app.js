@@ -8,6 +8,9 @@ import { orderSettings, editDeadline, canEdit, canDelete, editableStatuses,
          orderingWindow, serviceDateFor, priceLines, blockedMessage, ORDER_KINDS, TZ }
   from '../lib/orders.js';
 import { managerUsername } from '../lib/contact.js';
+import { authSettings } from '../lib/authSettings.js';
+import { switchableCompanies, membership, membershipState, activate }
+  from '../lib/membership.js';
 
 export const appRouter = Router();
 appRouter.use(requireUser);
@@ -23,10 +26,74 @@ appRouter.use(requireFreshCode);
    said so. Read on every use: withdrawing the permission has to take effect
    without waiting for anybody to reload anything. */
 async function ownerResetAllowed() {
-  const { data } = await db
-    .from('app_settings').select('value').eq('key', 'auth').maybeSingle();
-  return data?.value?.allow_owner_reset === true;
+  return (await authSettings()).allow_owner_reset === true;
 }
+
+/* ---------- the companies this person belongs to ---------- */
+
+/* The switcher. One entry is the ordinary case and draws nothing; several
+   mean the header becomes a menu. `current` is the company this session is
+   working in — the token's, not the row's, because two tabs may honestly be
+   in two different companies at once. */
+appRouter.get('/companies', async (req, res) => {
+  try {
+    res.json({
+      current: req.user.company_id,
+      companies: await switchableCompanies(req.user.id)
+    });
+  } catch (e) {
+    return dbError(res, e, 500);
+  }
+});
+
+/* Work in another of your companies from now on.
+
+   Everything the session is allowed to see or do is decided by the company
+   in the cookie, so switching is issuing a new one. The membership is
+   checked here and again on every request afterwards; a company whose code
+   has been reissued since this person last typed it cannot be switched into
+   at all — they are told to type it, which is the same answer they would get
+   on the way in. */
+appRouter.post('/company/switch', async (req, res) => {
+  const wanted = Number(req.body?.company_id);
+  if (!Number.isFinite(wanted) || wanted <= 0) {
+    return res.status(400).json({ error: 'Компания не указана' });
+  }
+  if (wanted === req.user.company_id) return res.json({ ok: true, company_id: wanted });
+
+  let seat;
+  try {
+    seat = await membership(req.user.id, wanted);
+  } catch (e) {
+    return dbError(res, e, 500);
+  }
+  if (!seat) return res.status(404).json({ error: 'Вы не работаете в этой компании' });
+
+  const state = membershipState(seat);
+  if (state === 'blocked') return res.status(403).json({ error: 'Доступ компании закрыт' });
+  if (state === 'stale') {
+    return res.status(409).json({ error: 'code_required', company_name: seat.company_name });
+  }
+
+  const active = await activate(req.user.id, wanted);
+  if (!active) return res.status(409).json({ error: 'Не удалось сменить компанию' });
+
+  issueUserSession(res, {
+    id: req.user.id,
+    user_name: req.user.name,
+    company_id: seat.company_id,
+    role: seat.role,
+    user_session_version: req.user.sv,
+    code_version: seat.code_version
+  });
+
+  res.json({
+    ok: true,
+    company_id: seat.company_id,
+    company_name: seat.company_name,
+    role: seat.role
+  });
+});
 
 /* Reissue the company code from inside the app.
 
@@ -62,7 +129,8 @@ appRouter.post('/company/rotate-code', async (req, res) => {
 });
 
 appRouter.get('/catalog', async (req, res) => {
-  const [items, categories, settings, orders, ownerReset, design, manager] = await Promise.all([
+  const [items, categories, settings, orders, ownerReset, design, manager, companies] =
+    await Promise.all([
     db.from('items')
       .select('id, item_name, item_category, item_cost, image_path, available')
       .order('item_name'),
@@ -71,7 +139,8 @@ appRouter.get('/catalog', async (req, res) => {
     orderSettings(),
     ownerResetAllowed(),
     db.from('app_settings').select('value').eq('key', 'design').maybeSingle(),
-    managerUsername()
+    managerUsername(),
+    switchableCompanies(req.user.id)
   ]);
 
   if (items.error) return dbError(res, items.error, 500);
@@ -112,7 +181,10 @@ appRouter.get('/catalog', async (req, res) => {
     // endpoint checks both halves again for itself
     can_reset_code: ownerReset && req.user.company_role === 'owner',
     // «Связаться с менеджером»; empty means no button
-    manager_username: manager
+    manager_username: manager,
+    // the header's company switcher; a single entry draws no menu
+    company_id: req.user.company_id,
+    companies
   });
 });
 
