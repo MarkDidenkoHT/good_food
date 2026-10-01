@@ -150,9 +150,7 @@ function rowHTML(u) {
       <td class="num">${u.chat_id
         ? esc(String(u.chat_id))
         : '<span class="pill pill--off">нет</span>'}</td>
-      <td>${u.companies?.company_name
-        ? `<span class="pill">${esc(u.companies.company_name)}</span>`
-        : '<span class="pill pill--off">нет</span>'}</td>
+      <td>${companyCell(u)}</td>
       <td><span class="pill">${ROLE[u.role] || u.role || '—'}</span></td>
       <td>${u.access ? '<span class="pill pill--on">Открыт</span>' : '<span class="pill pill--off">Закрыт</span>'}</td>
       <td class="num">${fmtDate(u.last_login)}</td>
@@ -162,6 +160,21 @@ function rowHTML(u) {
         <button class="btn btn--ghost btn--icon btn--sm" data-del="${u.id}" title="Удалить"><span data-icon="trash"></span></button>
       </div></td>
     </tr>`;
+}
+
+/* Every company the user belongs to; the one they are signed in to is marked,
+   because that is the one their orders and their История are about. */
+function companyCell(u) {
+  const mine = u.memberships?.length
+    ? u.memberships
+    : (u.companies?.company_name ? [{ id: u.company_id, company_name: u.companies.company_name }] : []);
+  if (!mine.length) return '<span class="pill pill--off">нет</span>';
+
+  return mine.map((c) => {
+    const here = c.id === u.company_id;
+    return `<span class="pill${here ? ' pill--on' : ''}"${
+      here ? ' title="Сейчас работает здесь"' : ''}>${esc(c.company_name || '—')}</span>`;
+  }).join(' ');
 }
 
 function openForm(user) {
@@ -195,15 +208,22 @@ function openForm(user) {
         </select>
       </div>
       <div class="field">
-        <label class="field__label" for="f-company">Компания</label>
-        <select class="input" id="f-company" name="company_id">
-          <option value="">— без компании —</option>
-          ${companies.map((c) => `
-            <option value="${c.id}" ${user?.company_id === c.id ? 'selected' : ''}>
-              ${esc(c.company_name)}
-            </option>`).join('')}
-        </select>
-        <p class="hint">Без компании пользователь не сможет оформлять заказы.</p>
+        <label class="field__label">Компании</label>
+        <div class="picklist" id="f-companies">
+          ${companies.length ? companies.map((c) => `
+            <label class="picklist__row">
+              <input type="checkbox" value="${c.id}"
+                     ${memberOf(user, c.id) ? 'checked' : ''}>
+              <span>${esc(c.company_name)}</span>
+              ${user?.company_id === c.id
+                ? '<span class="pill pill--on">сейчас здесь</span>' : ''}
+            </label>`).join('')
+            : '<p class="hint" style="margin:0">Компаний пока нет.</p>'}
+        </div>
+        <p class="hint">Можно отметить несколько — пользователь будет переключаться
+           между ними в приложении. Роль выше относится к той компании, в которой
+           он сейчас работает; владельца каждой компании удобнее назначать на
+           вкладке «Компании». Без компании пользователь не сможет оформлять заказы.</p>
       </div>
       <div class="field" style="margin-bottom:0">
         <label class="switch">
@@ -217,7 +237,10 @@ function openForm(user) {
         user_name: data.user_name,
         access: data.access === 'on',
         chat_id: (data.chat_id || '').trim() || null,
-        company_id: data.company_id || null,
+        // checkboxes do not survive FormData as a list, so they are read back
+        // off the form itself — it is still open while this runs
+        company_ids: [...document.querySelectorAll('#f-companies input:checked')]
+          .map((el) => Number(el.value)),
         role: data.role
       };
       if (isNew) {
@@ -242,6 +265,17 @@ function openForm(user) {
 
 }
 
+
+/* The role held at one company, which is not necessarily the role on the
+   user row — that one is about the company they are signed in to. */
+const roleAt = (user, companyId) =>
+  user?.memberships?.find((m) => m.id === companyId)?.role
+  ?? (user?.company_id === companyId ? user.role : null);
+
+const memberOf = (user, companyId) =>
+  user?.memberships?.length
+    ? user.memberships.some((m) => m.id === companyId)
+    : user?.company_id === companyId;
 
 function drawTabs() {
   const bar = root?.querySelector('#usr-tabs');
@@ -274,8 +308,10 @@ function drawCompanies(wrap) {
         <th style="width:110px">Доступ</th><th style="width:110px"></th>
       </tr></thead>
       <tbody>${list.map((c) => {
-        const staff = rows.filter((u) => u.company_id === c.id);
-        const owner = staff.find((u) => u.role === 'owner');
+        // the roster, not who is signed in where: somebody may be working in
+        // another of their companies at this moment and still be staff here
+        const staff = rows.filter((u) => memberOf(u, c.id));
+        const owner = staff.find((u) => roleAt(u, c.id) === 'owner');
         return `
         <tr>
           <td class="num">${c.id}</td>
@@ -382,7 +418,7 @@ function companyForm(company) {
         await api.patch(`/api/admin/companies/${company.id}`, payload);
         // a disabled select (no staff yet) sends nothing: leave the owner alone
         if (d.owner_id !== undefined) {
-          const before = rows.find((u) => u.company_id === company.id && u.role === 'owner')?.id ?? null;
+          const before = rows.find((u) => roleAt(u, company.id) === 'owner')?.id ?? null;
           const chosen = d.owner_id ? Number(d.owner_id) : null;
           if (chosen !== before) {
             await api.put(`/api/admin/companies/${company.id}/owner`, { user_id: chosen });
@@ -406,8 +442,8 @@ function companyForm(company) {
 
 /* Only this company's own people can own it; admin is not a company role. */
 function ownerField(company) {
-  const staff = rows.filter((u) => u.company_id === company.id && u.role !== 'admin');
-  const current = staff.find((u) => u.role === 'owner');
+  const staff = rows.filter((u) => memberOf(u, company.id) && u.role !== 'admin');
+  const current = staff.find((u) => roleAt(u, company.id) === 'owner');
   return `
       <div class="field">
         <label class="field__label" for="c-owner">Владелец</label>

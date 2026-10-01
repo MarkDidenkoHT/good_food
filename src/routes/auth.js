@@ -5,6 +5,9 @@ import { sign, cookieOpts, ADMIN_COOKIE, USER_COOKIE, requireAdmin, requireUser,
          issueUserSession as issueSession, revokeSessions } from '../lib/auth.js';
 import { sendNewUserNotice } from '../lib/notices.js';
 import { CODE_RE, hashCode } from '../lib/companyCode.js';
+import { membership, membershipState, switchableCompanies, joinCompany, activate, isMember }
+  from '../lib/membership.js';
+import { authSettings } from '../lib/authSettings.js';
 
 export const authRouter = Router();
 
@@ -30,10 +33,14 @@ export const authRouter = Router();
    and puts the request in front of the operators. Approval comes after, so a
    leaked code still gets nobody in on its own.
 
-   And the code no longer stops mattering once it has been typed. Every user
-   carries the generation of the code they entered (see lib/companyCode.js);
-   reissuing it makes the whole company stale in a single write, and each of
-   them returns only by typing the new one. */
+   And the code no longer stops mattering once it has been typed. Every
+   membership carries the generation of the code entered for it (see
+   lib/companyCode.js); reissuing it makes the whole company stale in a single
+   write, and each of them returns only by typing the new one.
+
+   A person may belong to several companies. The roster is user_companies; a
+   session names one of them, and signing in means choosing one — the last one
+   used, or the first that can be used. */
 
 const CHAT_RE = /^-?\d{1,20}$/;
 
@@ -100,19 +107,40 @@ async function loadCompany(code) {
   return { data: data || null, error: null };
 }
 
-/* The company has moved on to a newer code than this user last typed. They
-   keep their place on the roster and their history; they simply cannot order
-   until somebody gives them the current code. */
-const staleCode = (user) =>
-  (user.code_version ?? 0) < (user.companies?.code_version ?? 1);
+/* Sign in to a company: the one this person last used, or — when that one is
+   gone, blocked or has moved on to a code they have not typed — the first of
+   theirs that can be used. Returns the seat, or the reason there is none.
 
-function publicUser(user, companyName) {
+   A stale company is not skipped over silently when it is the only one: the
+   app has to say «type the new code», and it can only say that about a
+   company the user is still a member of. */
+async function chooseSeat(user) {
+  const mine = await switchableCompanies(user.id);
+  if (!mine.length) return { error: 'no_company' };
+
+  const wanted = user.company_id
+    ? mine.find((c) => c.id === user.company_id) : null;
+  const seat = (wanted && wanted.state === 'ok')
+    ? wanted
+    : mine.find((c) => c.state === 'ok') || wanted || mine[0];
+
+  if (seat.state === 'blocked') return { error: 'company_blocked' };
+  if (seat.state === 'stale') return { error: 'code_rotated' };
+
+  const active = await activate(user.id, seat.id);
+  if (!active) return { error: 'no_company' };
+  return { seat, user: { ...user, ...active } };
+}
+
+async function publicUser(user, companyName) {
   return {
     id: user.id,
     user_name: user.user_name,
     role: user.role,
     company_id: user.company_id,
-    company_name: companyName ?? user.companies?.company_name ?? null
+    company_name: companyName ?? user.companies?.company_name ?? null,
+    // the switcher: one entry means the app draws no switcher at all
+    companies: await switchableCompanies(user.id)
   };
 }
 
@@ -139,9 +167,12 @@ authRouter.post('/admin/login', async (req, res) => {
   if (error) return dbError(res, error, 500);
   if (cErr) return dbError(res, cErr, 500);
 
+  /* Any of the admin's own companies' codes will do. They may hold several,
+     and being made to remember which one the panel was keyed to would be an
+     accident waiting to happen rather than a security property. */
   const ok = user && company &&
     user.role === 'admin' &&
-    user.company_id === company.id &&
+    await isMember(user.id, company.id) &&
     user.access !== false &&
     company.access !== false;
   if (!ok) {
@@ -183,17 +214,26 @@ authRouter.post('/user/telegram', async (req, res) => {
   const { data: user, error } = await loadUser(chatId);
   if (error) return dbError(res, error, 500);
   if (!user) return res.status(404).json({ error: 'not_registered' });
+
   /* Ahead of the approval check on purpose: under the new registration a
      person who has not yet entered a code is not waiting on anybody, they
      are waiting on themselves, and must be told to type the code. */
-  if (!user.company_id) return res.status(409).json({ error: 'no_company' });
+  let chosen;
+  try {
+    chosen = await chooseSeat(user);
+  } catch (e) {
+    return dbError(res, e, 500);
+  }
+  if (chosen.error === 'no_company') return res.status(409).json({ error: 'no_company' });
   if (user.access === false) return res.status(403).json({ error: 'pending' });
-  if (user.companies?.access === false) return res.status(403).json({ error: 'company_blocked' });
-  if (staleCode(user)) return res.status(409).json({ error: 'code_rotated' });
+  if (chosen.error === 'company_blocked') {
+    return res.status(403).json({ error: 'company_blocked' });
+  }
+  if (chosen.error === 'code_rotated') return res.status(409).json({ error: 'code_rotated' });
 
   await touch(user.id);
-  issueSession(res, user);
-  res.json(publicUser(user));
+  issueSession(res, chosen.user);
+  res.json(await publicUser(chosen.user, chosen.seat.company_name));
 });
 
 /* The company code: joining on first use, and coming back after a rotation.
@@ -232,36 +272,43 @@ authRouter.post('/user/join', async (req, res) => {
   failures.delete(limitKey);
   if (company.access === false) return res.status(403).json({ error: 'company_blocked' });
 
-  // Already elsewhere: the code has to be their own company's.
-  if (user.company_id && user.company_id !== company.id) {
-    return res.status(403).json({ error: 'Этот код принадлежит другой компании' });
+  /* Three ways to arrive here, and only the middle one is new:
+
+     — already a member: the code was typed to come back after a rotation, and
+       the membership is re-stamped with the generation just typed;
+     — a member of somewhere else: this is a second company, allowed only
+       where the operator has switched that on. Otherwise the code belongs to
+       somebody else's company as far as this person is concerned;
+     — a member of nowhere: registering, as before. */
+  const already = await isMember(user.id, company.id);
+  if (!already) {
+    const hasAny = (await switchableCompanies(user.id)).length > 0;
+    if (hasAny && !(await authSettings()).allow_multi_company_join) {
+      return res.status(403).json({ error: 'Этот код принадлежит другой компании' });
+    }
   }
 
   /* Nobody is promoted by being early. Whoever registers first would
      otherwise own the company — and, where owners may reissue the code, hold
      its kill switch — on no better evidence than having typed fastest. An
      admin names the owner in the panel. */
-  const firstJoin = !user.company_id;
-  const role = firstJoin ? 'employee' : user.role;
+  let joined;
+  try {
+    joined = await joinCompany(user.id, company.id, company.code_version ?? 1,
+                               { role: 'employee' });
+  } catch (e) {
+    return dbError(res, e, 500);
+  }
 
-  const { data: updated, error: uErr } = await db
-    .from('users')
-    .update({
-      company_id: company.id,
-      role,
-      // whichever generation of the code they just typed, it is the current one
-      code_version: company.code_version ?? 1,
-      last_login: new Date().toISOString()
-    })
-    .eq('id', user.id)
-    .select('id, user_name, role, company_id, code_version, user_session_version')
-    .single();
-  if (uErr) return dbError(res, uErr);
+  const updated = await activate(user.id, company.id);
+  if (!updated) return res.status(500).json({ error: 'Не удалось войти в компанию' });
+  await touch(user.id);
 
-  /* The operators hear about a person once: when they first name a company.
-     Coming back after a rotation is not a new request — they are already on
-     the roster and already approved. */
-  if (firstJoin) {
+  /* The operators hear about a person when they name a company they were not
+     in. Coming back after a rotation is not a new request — they are already
+     on the roster and already approved — but a second company is: it puts
+     that person in front of a different set of orders. */
+  if (joined) {
     await sendNewUserNotice(
       { ...updated, chat_id: user.chat_id, tg_username: user.tg_username, access: user.access },
       company.company_name
@@ -272,7 +319,7 @@ authRouter.post('/user/join', async (req, res) => {
   if (user.access === false) return res.status(403).json({ error: 'pending' });
 
   issueSession(res, updated);
-  res.json(publicUser(updated, company.company_name));
+  res.json(await publicUser(updated, company.company_name));
 });
 
 authRouter.post('/user/logout', async (req, res) => {
@@ -281,20 +328,29 @@ authRouter.post('/user/logout', async (req, res) => {
   res.json({ ok: true });
 });
 
+/* Who the cookie says you are, and which company it says you are in.
+   requireUser has already checked that the membership is real and the
+   company open; what is left is the person themselves. */
 authRouter.get('/user/me', requireUser, async (req, res) => {
   const { data, error } = await db
-    .from('users')
-    .select('id, user_name, access, role, company_id, code_version, ' +
-            'companies(company_name, access, code_version)')
-    .eq('id', req.user.id)
-    .maybeSingle();
+    .from('users').select('id, user_name, access, role')
+    .eq('id', req.user.id).maybeSingle();
   if (error) return dbError(res, error, 500);
+
+  let seat;
+  try {
+    seat = await membership(req.user.id, req.user.company_id);
+  } catch (e) {
+    return dbError(res, e, 500);
+  }
+
   /* A stale code fails the same way as the rest: the app drops back to
      /user/telegram, which is the one place that says precisely what went
      wrong and gets the right screen drawn. */
-  if (!data || data.access === false || !data.company_id || staleCode(data)) {
+  if (!data || data.access === false || !seat || membershipState(seat) !== 'ok') {
     res.clearCookie(USER_COOKIE, { path: '/' });
     return res.status(401).json({ error: 'Not authenticated' });
   }
-  res.json(publicUser(data));
+  res.json(await publicUser(
+    { ...data, role: seat.role, company_id: seat.company_id }, seat.company_name));
 });

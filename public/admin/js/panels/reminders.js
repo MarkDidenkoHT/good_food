@@ -141,7 +141,9 @@ function audienceCount(a = {}) {
   const list = reachable();
   if (a.mode === 'companies') {
     const ids = new Set(a.company_ids || []);
-    return list.filter((u) => ids.has(u.company_id)).length;
+    // counted over the roster: a person who works at two of the chosen
+    // companies is still one recipient
+    return list.filter((u) => [...ids].some((id) => inCompany(u, id))).length;
   }
   if (a.mode === 'users') {
     const ids = new Set(a.user_ids || []);
@@ -595,4 +597,12 @@ function wireForm(draft) {
 
   paintText();
   drawPicker();
+}
+
+/* A user belongs to every company on their roster; `company_id` is only the
+   one they are signed in to. Older responses carry no roster, so fall back. */
+function inCompany(user, companyId) {
+  return user?.memberships?.length
+    ? user.memberships.some((m) => m.id === companyId)
+    : user?.company_id === companyId;
 }

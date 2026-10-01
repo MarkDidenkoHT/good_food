@@ -1,3 +1,4 @@
+import { memberIds } from './membership.js';
 import { db } from './db.js';
 import { sendMessage, sendPhoto, deleteMessage, esc } from './telegram.js';
 import { readImage } from './storage.js';
@@ -41,9 +42,12 @@ export async function resolveAudience(audience = {}) {
     .order('id');
 
   if (audience.mode === 'companies') {
-    const ids = (audience.company_ids || []).map(Number).filter(Boolean);
+    /* The roster, not the signed-in company: a person who works at two
+       companies is written to about both, wherever they happen to be
+       standing when the message goes out. */
+    const ids = await memberIds(audience.company_ids);
     if (!ids.length) return [];
-    query = query.in('company_id', ids);
+    query = query.in('id', ids);
   } else if (audience.mode === 'users') {
     const ids = (audience.user_ids || []).map(Number).filter(Boolean);
     if (!ids.length) return [];

@@ -11,6 +11,7 @@ import { backfillCodeHashes } from './companyCode.js';
 export const TABLES = [
   ['companies', 'id'],
   ['users', 'id'],
+  ['user_companies', 'user_id'],
   ['categories', 'id'],
   ['materials', 'id'],
   ['items', 'id'],
@@ -69,6 +70,20 @@ export async function replaceAll(data) {
                          coalesce((select max(id) from "${t}"), 0) + 1, false)`);
       }
     }
+
+    /* A backup taken before a person could belong to more than one company
+       carries no roster at all. Rebuild it from users.company_id, or the
+       restored database would have everybody signed in to a company they are
+       no longer a member of — which is to say, locked out. */
+    await client.query(`
+      insert into user_companies (user_id, company_id, role, code_version, created_at)
+      select u.id, u.company_id,
+             case when u.role = 'owner' then 'owner' else 'employee' end,
+             u.code_version, u.created_at
+        from users u
+       where u.company_id is not null
+         and not exists (select 1 from user_companies m where m.user_id = u.id)
+          on conflict do nothing`);
 
     // backups taken before codes were hashed hand them over in clear text;
     // hash them before this commits, or nobody could log in until a restart

@@ -12,7 +12,7 @@ import { paintIcons } from '../icons.js';
 let settings = {
   catalog: { group_by_category: false, show_images: false },
   notifications: { notify_owner: true },
-  auth: { allow_owner_reset: false },
+  auth: { allow_owner_reset: false, allow_multi_company_join: false },
   design: { background_path: null },
   server: { public_url: '' },
   contact: { manager_username: 'lovesushitrifle' },
@@ -82,6 +82,7 @@ function draw() {
   const grouped = !!settings.catalog?.group_by_category;
   const notifyOwner = settings.notifications?.notify_owner !== false;
   const ownerReset = !!settings.auth?.allow_owner_reset;
+  const multiCompany = !!settings.auth?.allow_multi_company_join;
   const images = !!settings.catalog?.show_images;
   const imgSize = settings.catalog?.image_size || 'md';
   const bgPath = settings.design?.background_path || null;
@@ -235,6 +236,19 @@ function draw() {
              пароль. ${ownerReset
                ? 'Владелец может сделать это сам из приложения — новый пароль придёт ему и в группу операторов.'
                : 'Владельцу придётся обратиться к администратору.'}</p>
+        </div>
+
+        <div class="field" style="margin-top:16px;margin-bottom:0">
+          <span class="field__label">Вход по паролю во вторую компанию</span>
+          <div class="seg" id="seg-multi-company">
+            <button data-v="off" aria-pressed="${!multiCompany}">Запрещён</button>
+            <button data-v="on"  aria-pressed="${multiCompany}">Разрешён</button>
+          </div>
+          <p class="hint">Пользователь может работать сразу в нескольких компаниях
+             и переключаться между ними в приложении. ${multiCompany
+               ? 'Сотрудник, знающий пароль другой компании, может добавить её себе сам.'
+               : 'Добавить пользователю вторую компанию может только администратор — ' +
+                 'на вкладке «Пользователи».'}</p>
         </div>
       </div>
     </div>
@@ -469,6 +483,19 @@ function draw() {
     };
   });
 
+  card.querySelectorAll('#seg-multi-company button').forEach((b) => {
+    b.onclick = () => {
+      const on = b.dataset.v === 'on';
+      if (on && !settings.auth?.allow_multi_company_join) {
+        return confirmDialog('Вход во вторую компанию',
+          'Любой сотрудник, которому назовут пароль другой компании, сможет ' +
+          'добавить её себе сам — и увидит её заказы. Разрешить?',
+          () => saveAuth({ allow_multi_company_join: true }), 'Разрешить');
+      }
+      saveAuth({ allow_multi_company_join: on });
+    };
+  });
+
   card.querySelectorAll('#seg-fp button').forEach((b) => {
     b.onclick = () => saveFrontpad({ enabled: b.dataset.v === 'on' });
   });
@@ -579,12 +606,16 @@ async function saveContact(raw) {
   }
 }
 
-async function saveOwnerReset(allow) {
+const saveOwnerReset = (allow) => saveAuth({ allow_owner_reset: allow });
+
+/* The two switches of the «Пароль компании» card share one stored value, so
+   each save sends only the half it changed and the server keeps the rest. */
+async function saveAuth(patch) {
   const before = settings.auth;
-  settings.auth = { ...settings.auth, allow_owner_reset: allow };
+  settings.auth = { ...settings.auth, ...patch };
   draw();
   try {
-    const res = await api.put('/api/admin/settings/auth', { allow_owner_reset: allow });
+    const res = await api.put('/api/admin/settings/auth', patch);
     settle('auth', res.value);
     toast('Настройка сохранена');
   } catch (e) {

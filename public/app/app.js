@@ -231,7 +231,10 @@ function render() {
       <div class="wrap">
         <div class="head__row">
           <div class="head__id">
-            <div class="head__name">${esc(me.company_name || 'Компания')}</div>
+            ${myCompanies().length > 1 ? `
+            <button class="head__name head__name--switch" id="switch-company" type="button"
+                    aria-haspopup="dialog">${esc(companyName())}<span class="head__caret">▾</span></button>`
+            : `<div class="head__name">${esc(companyName())}</div>`}
             <div class="head__who">${esc(me.user_name || '')}</div>
           </div>
           ${catalog.manager_username ? `
@@ -254,6 +257,7 @@ function render() {
     </div>
     <div class="wrap" id="body"></div>`;
 
+  view.querySelector('#switch-company')?.addEventListener('click', chooseCompany);
   view.querySelector('#rotate-code')?.addEventListener('click', rotateCode);
   view.querySelector('#contact')?.addEventListener('click', contactManager);
 
@@ -269,6 +273,110 @@ function render() {
 
   if (screen === 'history') return renderHistory();
   renderCatalog();
+}
+
+/* ── companies ──────────────────────────────────────────────────
+   Somebody may work at more than one. Which one they are in decides the
+   catalog's prices, where an order lands and whose history История shows —
+   so it is named in the header, and switching it is a deliberate act with
+   its own confirmation of what is about to be left behind. */
+
+// the catalog is re-read on every switch, so it holds the current answer;
+// /user/me is what there is before the first catalog has arrived
+const myCompanies = () => catalog.companies || me?.companies || [];
+
+const currentCompanyId = () => catalog.company_id ?? me?.company_id ?? null;
+
+function companyName() {
+  const mine = myCompanies().find((c) => c.id === currentCompanyId());
+  return mine?.company_name || me?.company_name || 'Компания';
+}
+
+/* The switcher. A company whose code has been reissued since this person
+   last typed it is shown, greyed, with what to do about it — leaving it out
+   would look like being thrown off the roster, which is not what happened. */
+function chooseCompany() {
+  const current = currentCompanyId();
+  const rows = myCompanies().map((c) => {
+    const state = c.id === current ? 'current' : c.state;
+    const note = state === 'current' ? 'Вы здесь'
+      : state === 'blocked' ? 'Доступ закрыт'
+      : state === 'stale' ? 'Нужен новый код'
+      : c.role === 'owner' ? 'Владелец' : '';
+    return `
+      <button class="pick" type="button" data-company="${c.id}"
+              ${state === 'current' || state === 'blocked' ? 'disabled' : ''}
+              aria-current="${state === 'current'}">
+        <span class="pick__name">${esc(c.company_name || 'Компания')}</span>
+        ${note ? `<span class="pick__note">${esc(note)}</span>` : ''}
+      </button>`;
+  }).join('');
+
+  const sheet = document.createElement('div');
+  sheet.className = 'sheet';
+  sheet.innerHTML = `
+    <div class="sheet__box" role="dialog" aria-modal="true" aria-labelledby="pick-title">
+      <h2 class="sheet__title" id="pick-title">Компания</h2>
+      <div class="picks">${rows}</div>
+      <div class="sheet__acts">
+        <button class="btn btn--ghost" type="button" data-close>Закрыть</button>
+      </div>
+    </div>`;
+
+  const close = () => {
+    sheet.remove();
+    document.removeEventListener('keydown', onKey);
+  };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+
+  sheet.addEventListener('click', (e) => {
+    if (e.target === sheet || e.target.closest('[data-close]')) return close();
+    const id = e.target.closest('[data-company]')?.dataset.company;
+    if (!id) return;
+    close();
+    switchCompany(Number(id));
+  });
+  document.addEventListener('keydown', onKey);
+  document.body.append(sheet);
+}
+
+/* Switching is a new session for another company, so nothing from the old
+   one may survive it: a basket filled here would otherwise be sent there,
+   and an order half-edited there cannot be finished here. */
+async function switchCompany(id) {
+  const target = myCompanies().find((c) => c.id === id);
+  if (!target) return;
+
+  const pending = KINDS.some((k) => carts[k].size) || editing;
+  if (pending && !await ask(
+      `Перейти в «${target.company_name || 'другую компанию'}»?\n\n` +
+      'Несохранённая корзина будет очищена.')) return;
+
+  const done = blockScreen('Меняем компанию');
+  try {
+    const { ok, data } = await post('/api/app/company/switch', { company_id: id });
+    if (!ok) {
+      /* The code of that company has been reissued since they last typed
+         it. The way back is the same form as any other code — and typing it
+         signs them into that company, which is where they were going. */
+      if (data.error === 'code_required') {
+        return renderJoin('Код компании',
+          `Код «${data.company_name || target.company_name || ''}» изменился — ` +
+          'введите новый, чтобы продолжить работу в этой компании.');
+      }
+      return toast(data.error || 'Не удалось сменить компанию', 'err');
+    }
+
+    for (const k of KINDS) carts[k].clear();
+    editing = null;
+    kind = 'order';
+    screen = 'catalog';
+    me = { ...me, company_id: data.company_id, company_name: data.company_name, role: data.role };
+    await openApp();
+    toast(`Вы в компании «${data.company_name || ''}»`);
+  } finally {
+    done();
+  }
 }
 
 /* A chat with the manager, inside Telegram where the app runs. */

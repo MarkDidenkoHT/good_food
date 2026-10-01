@@ -477,3 +477,20 @@ input[type="date"].input--sm { min-width: 140px; }
 
 /* the unit after a material quantity box — шт or кг */
 .picker__unit { width: 18px; flex: 0 0 auto; color: var(--ink-3); font-size: 12px; }
+
+/* A short list of checkboxes inside a form — the companies a user belongs to.
+   Scrolls rather than pushing the modal's buttons off the screen. */
+.picklist {
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: 190px; overflow: auto;
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: 6px; background: var(--surface);
+}
+.picklist__row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 8px; border-radius: var(--r-sm); cursor: pointer;
+  font-size: 14px; font-weight: 600;
+}
+.picklist__row:hover { background: var(--surface-2); }
+.picklist__row input { flex: 0 0 auto; accent-color: var(--brand); }
+.picklist__row span:not(.pill) { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
