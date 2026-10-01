@@ -465,7 +465,9 @@ function ownerField(company) {
    the change — and the count makes it concrete, because "все сотрудники" and
    "14 человек" land differently on the person about to press it. */
 function rotateCode(company) {
-  const staff = rows.filter((u) => u.company_id === company.id && u.access !== false).length;
+  // the roster, not who is signed in here: everybody on it loses access,
+  // including the people currently working in another of their companies
+  const staff = rows.filter((u) => memberOf(u, company.id) && u.access !== false).length;
 
   confirmDialog('Перевыпустить пароль',
     `Пароль компании «${company.company_name}» будет заменён. ` +

@@ -1,4 +1,5 @@
 import { db, pool } from './db.js';
+import { companyNamesOf } from './membership.js';
 import { sendMessage, editMessageText, adminGroupId, esc } from './telegram.js';
 import { publicUrl } from './publicUrl.js';
 
@@ -18,11 +19,26 @@ const panelUrl = async (userId) => {
   return base ? `${base}/admin#users?focus=${userId}` : null;
 };
 
+/* The whole roster, not the seat. A person may work at several companies,
+   and the post an operator acts on has to say which — reading it off
+   users.company_id showed only the one they happened to be signed in to. */
+function companyLine(user) {
+  const names = user.company_names?.length
+    ? user.company_names
+    : (user.company_name ? [user.company_name] : []);
+  if (!names.length) return null;
+  const label = names.length > 1 ? 'Компании' : 'Компания';
+  return `${label}: <b>${names.map(esc).join(', ')}</b>`;
+}
+
 function statusLine(user, { deleted = false } = {}) {
   if (deleted) return '🗑 <b>Удалён</b>';
   if (user.access === false) return '⛔️ <b>Доступ закрыт</b>';
-  if (!user.company_id) return '⚠️ <b>Доступ открыт, компания не назначена</b>';
-  return `✅ <b>Доступ открыт</b> · ${esc(user.company_name || 'компания назначена')}`;
+  const names = user.company_names?.length
+    ? user.company_names
+    : (user.company_name ? [user.company_name] : []);
+  if (!names.length) return '⚠️ <b>Доступ открыт, компания не назначена</b>';
+  return `✅ <b>Доступ открыт</b> · ${esc(names.join(', '))}`;
 }
 
 function noticeText(user, opts = {}) {
@@ -31,7 +47,7 @@ function noticeText(user, opts = {}) {
   });
   return [
     '<b>Новый пользователь</b>',
-    user.company_name ? `Компания: <b>${esc(user.company_name)}</b>` : null,
+    companyLine(user),
     `Имя: ${esc(user.user_name || '—')}`,
     user.tg_username ? `Username: @${esc(user.tg_username)}` : null,
     `chat_id: <code>${user.chat_id}</code>`,
@@ -39,6 +55,36 @@ function noticeText(user, opts = {}) {
     statusLine(user, opts),
     `<i>обновлено ${when}</i>`
   ].filter((l) => l !== null).join('\n');
+}
+
+/* Joining a second company is news, but it is not a second person: the
+   worklist post stays the one that already exists. */
+function joinedText(user, companyName) {
+  return [
+    '<b>Добавлена компания</b>',
+    `${esc(user.user_name || '—')} теперь работает и в «${esc(companyName || '—')}»`,
+    `chat_id: <code>${user.chat_id}</code>`
+  ].join('\n');
+}
+
+/* The companies to name on a post. Best effort: a roster lookup must never
+   be the reason a notice is not sent.
+
+   The fallback is for a user who has just been deleted — the memberships
+   went with the row, and the post still has to say which company this was
+   about. */
+async function rosterOf(user) {
+  let names = [];
+  try {
+    names = await companyNamesOf(user.id);
+  } catch (e) {
+    console.error('[notices]', e);
+  }
+  if (names.length || !user.company_id) return names;
+
+  const { data } = await db
+    .from('companies').select('company_name').eq('id', user.company_id).maybeSingle();
+  return data?.company_name ? [data.company_name] : [];
 }
 
 // A deleted user has nothing left to open in the panel.
@@ -56,7 +102,24 @@ export async function sendNewUserNotice(user, companyName = null) {
     return;
   }
 
-  const full = { ...user, company_name: companyName ?? user.company_name ?? null };
+  const full = {
+    ...user,
+    company_name: companyName ?? user.company_name ?? null,
+    company_names: await rosterOf(user)
+  };
+
+  /* One worklist post per person, not per company. This used to post afresh
+     and overwrite notice_message_id every time, so joining a second company
+     orphaned the first post — nothing could edit it again, and it sat in the
+     group claiming a status that would never be updated. A person who
+     already has a post keeps it: the new company is announced on its own and
+     the post is rewritten to show the roster it now has. */
+  if (user.notice_message_id) {
+    await sendMessage(group, joinedText(full, companyName));
+    await refreshUserNotice(user).catch((e) => console.error('[notices]', e));
+    return;
+  }
+
   const res = await sendMessage(group, noticeText(full), {
     reply_markup: await markup(full)
   });
@@ -76,14 +139,7 @@ export async function refreshUserNotice(user, opts = {}) {
   const group = adminGroupId();
   if (!group || !user?.notice_message_id) return;
 
-  let company_name = null;
-  if (user.company_id) {
-    const { data } = await db
-      .from('companies').select('company_name').eq('id', user.company_id).maybeSingle();
-    company_name = data?.company_name || null;
-  }
-
-  const full = { ...user, company_name };
+  const full = { ...user, company_names: await rosterOf(user) };
   await editMessageText(group, user.notice_message_id, noticeText(full, opts), {
     reply_markup: await markup(full, opts)
   });

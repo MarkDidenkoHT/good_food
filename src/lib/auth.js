@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { db, pool } from './db.js';
-import { membership } from './membership.js';
+import { membership, hasOpenCompany } from './membership.js';
 
 const SECRET = process.env.JWT_SECRET || 'dev-insecure-secret';
 export const ADMIN_COOKIE = 'gf_admin';
@@ -57,7 +57,7 @@ function loadAccount(id) {
   return db
     .from('users')
     .select('id, user_name, role, access, company_id, admin_session_version, ' +
-            'user_session_version, companies(access)')
+            'user_session_version')
     .eq('id', id)
     .maybeSingle();
 }
@@ -68,8 +68,26 @@ export async function requireAdmin(req, res, next) {
 
   const { data: user, error } = await loadAccount(claims.id);
   if (error) return res.status(503).json({ error: 'Database unavailable' });
-  if (!user || user.role !== 'admin' || user.access === false || user.companies?.access === false ||
+  if (!user || user.role !== 'admin' || user.access === false ||
       claims.sv !== user.admin_session_version) {
+    res.clearCookie(ADMIN_COOKIE, { path: '/' });
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+
+  /* Closing a company must not shut an admin out of the panel, which is not
+     scoped to one company in the first place. The check used to read
+     users.company_id — the company they happen to be seated in — so an admin
+     of three companies lost the whole panel when one of them was closed. It
+     is the roster that answers this now: the door stays open while any one
+     of their companies does. */
+  let open;
+  try {
+    open = await hasOpenCompany(user.id);
+  } catch (e) {
+    console.error('[auth]', e);
+    return res.status(503).json({ error: 'Database unavailable' });
+  }
+  if (!open) {
     res.clearCookie(ADMIN_COOKIE, { path: '/' });
     return res.status(401).json({ error: 'Not authenticated' });
   }
