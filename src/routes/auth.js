@@ -120,9 +120,15 @@ async function chooseSeat(user) {
 
   const wanted = user.company_id
     ? mine.find((c) => c.id === user.company_id) : null;
+  /* A stale seat is recoverable — typing that company's new code gets them
+     back in — and a blocked one is not. Preferring stale over blocked keeps
+     somebody whose seated company was shut out of a dead-end screen when
+     another of their companies is only waiting for a code. */
   const seat = (wanted && wanted.state === 'ok')
     ? wanted
-    : mine.find((c) => c.state === 'ok') || wanted || mine[0];
+    : mine.find((c) => c.state === 'ok')
+      || mine.find((c) => c.state === 'stale')
+      || wanted || mine[0];
 
   if (seat.state === 'blocked') return { error: 'company_blocked' };
   if (seat.state === 'stale') return { error: 'code_rotated' };
