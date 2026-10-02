@@ -1,4 +1,4 @@
-import { memberIds } from './membership.js';
+import { membersOfCompanies } from './membership.js';
 import { db } from './db.js';
 import { sendMessage, sendPhoto, deleteMessage, esc } from './telegram.js';
 import { readImage } from './storage.js';
@@ -41,13 +41,18 @@ export async function resolveAudience(audience = {}) {
     .neq('access', false)
     .order('id');
 
+  /* The roster, not the signed-in company: a person who works at two
+     companies is written to about both, wherever they happen to be standing
+     when the message goes out. `targeted` also remembers WHICH of the named
+     companies each of them was reached as, because that — not the seat they
+     happen to occupy — is what the history row has to record. */
+  let targeted = null;
   if (audience.mode === 'companies') {
-    /* The roster, not the signed-in company: a person who works at two
-       companies is written to about both, wherever they happen to be
-       standing when the message goes out. */
-    const ids = await memberIds(audience.company_ids);
-    if (!ids.length) return [];
-    query = query.in('id', ids);
+    const rows = await membersOfCompanies(audience.company_ids);
+    if (!rows.length) return [];
+    targeted = new Map();
+    for (const r of rows) if (!targeted.has(r.user_id)) targeted.set(r.user_id, r.company_id);
+    query = query.in('id', [...targeted.keys()]);
   } else if (audience.mode === 'users') {
     const ids = (audience.user_ids || []).map(Number).filter(Boolean);
     if (!ids.length) return [];
@@ -56,7 +61,9 @@ export async function resolveAudience(audience = {}) {
 
   const { data, error } = await query;
   if (error) throw error;
-  return data || [];
+  if (!targeted) return data || [];
+  // company_id on a recipient is the company this send is about
+  return (data || []).map((u) => ({ ...u, company_id: targeted.get(u.id) ?? u.company_id }));
 }
 
 /* The stored shape, normalised so history renders the same way it was sent. */

@@ -82,7 +82,7 @@ function loadUser(chatId) {
   return db
     .from('users')
     .select('id, user_name, access, role, chat_id, tg_username, company_id, code_version, ' +
-            'admin_session_version, user_session_version, ' +
+            'admin_session_version, user_session_version, notice_message_id, ' +
             'companies(id, company_name, access, code_version)')
     .eq('chat_id', chatId)
     .maybeSingle();
@@ -310,7 +310,8 @@ authRouter.post('/user/join', async (req, res) => {
      that person in front of a different set of orders. */
   if (joined) {
     await sendNewUserNotice(
-      { ...updated, chat_id: user.chat_id, tg_username: user.tg_username, access: user.access },
+      { ...updated, chat_id: user.chat_id, tg_username: user.tg_username,
+        access: user.access, notice_message_id: user.notice_message_id },
       company.company_name
     );
   }

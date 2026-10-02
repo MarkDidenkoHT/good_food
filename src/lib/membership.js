@@ -1,5 +1,5 @@
 import { pool } from './db.js';
-import { currentVersion, forgetCompany } from './companyCode.js';
+import { forgetCompany } from './companyCode.js';
 
 /* Who belongs to which company.
 
@@ -94,22 +94,41 @@ export async function activate(userId, companyId) {
   return rows[0] || null;
 }
 
-/* The roster of one or more companies, as user ids — what the audience of a
-   broadcast or a reminder is really asking for. Someone signed in elsewhere
-   is still on it. */
-export async function memberIds(companyIds) {
+/* The roster of one or more companies, as (user, company) rows — what the
+   audience of a broadcast or a reminder is really asking for. Someone signed
+   in elsewhere is still on it, and the company_id here is the one the
+   audience named, not the one they happen to be standing in. */
+export async function membersOfCompanies(companyIds) {
   const ids = [...new Set((companyIds || []).map(Number).filter(Boolean))];
   if (!ids.length) return [];
   const { rows } = await pool.query(
-    'select distinct user_id from user_companies where company_id = any($1::bigint[])', [ids]);
-  return rows.map((r) => r.user_id);
+    `select m.user_id, m.company_id
+       from user_companies m
+      where m.company_id = any($1::bigint[])
+      order by m.user_id, m.company_id`,
+    [ids]);
+  return rows;
 }
 
-/* How many people belong to each company, for the panel's company list. */
-export async function memberCounts() {
+/* Every company this person belongs to, by name — what a notice has to say
+   when "their company" is no longer a single answer. */
+export async function companyNamesOf(userId) {
+  return (await membershipsOf(userId)).map((r) => r.company_name).filter(Boolean);
+}
+
+/* Is any company of theirs still open? The admin panel is not scoped to one
+   company, so closing one of an admin's companies must not shut the panel.
+
+   A roster with nothing on it is not a closed company and does not shut it
+   either: that is the state of an admin row created before any of this, and
+   locking those out would be a worse failure than the one this answers. */
+export async function hasOpenCompany(userId) {
   const { rows } = await pool.query(
-    'select company_id, count(*)::int as n from user_companies group by company_id');
-  return Object.fromEntries(rows.map((r) => [r.company_id, r.n]));
+    `select bool_or(c.access is distinct from false) as open
+       from user_companies m join companies c on c.id = m.company_id
+      where m.user_id = $1`,
+    [userId]);
+  return rows[0]?.open !== false;
 }
 
 /* Memberships of several users at once, for the users table in the panel. */
@@ -150,7 +169,12 @@ export async function setMemberships(userId, companyIds, { roles = {} } = {}) {
       [userId, ids]);
 
     for (const id of ids) {
-      const version = await currentVersion(id);
+      /* Read inside the transaction: currentVersion() answers from a 30s
+         cache on the pool, and a company rotated a moment ago would stamp a
+         brand-new membership with the generation it has just left behind. */
+      const { rows: [company] } = await client.query(
+        'select code_version from companies where id = $1', [id]);
+      const version = company?.code_version;
       await client.query(
         `insert into user_companies (user_id, company_id, role, code_version)
               values ($1, $2, coalesce($3, 'employee'), $4)
