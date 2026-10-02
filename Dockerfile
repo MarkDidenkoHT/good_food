@@ -13,7 +13,6 @@ COPY server.js ./
 COPY src ./src
 COPY public ./public
 COPY db ./db
-COPY scripts ./scripts
 
 # pictures and backups live on volumes mounted here; created now so they belong to `node`
 RUN mkdir -p /data/uploads /data/backups && chown -R node:node /data
