@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { db, dbError } from '../lib/db.js';
 import { requireAdmin } from '../lib/auth.js';
-import { refreshUserNotice, announceOrderDecision } from '../lib/notices.js';
+import { refreshUserNotice, announceOrderDecision, markOrderDeleted } from '../lib/notices.js';
 import { pushOrder, FRONTPAD_DEFAULTS, frontpadConfigured, testConnection, recentLog }
   from '../lib/frontpad.js';
 import { sendMessage, notifyAdmins, kitchenGroupId, botConfigured, setWebhook, esc as tgEsc }
@@ -565,6 +565,32 @@ adminRouter.post('/orders/:id/decide', async (req, res) => {
 
   announceOrderDecision(data).catch((e) => console.error('[notices]', e));
   res.json({ ...data, frontpad });
+});
+
+/* Remove an order outright, whatever its status.
+
+   The customer's own delete (routes/app.js) only ever reaches a new order of
+   their own, and nothing could take a decided one off the books — a test
+   order, or one entered by mistake, stayed in the statistics for good. This
+   is the way out, and it is the panel's alone.
+
+   Nothing that points at the row needs cleaning up first: a return's
+   source_order_id and a FrontPad log line's order_id are both «on delete set
+   null», so the history of what was sent survives the order going away. An
+   order already in FrontPad is not recalled from there — deleting it here
+   says nothing to them, and the log line says it was sent. */
+adminRouter.delete('/orders/:id', async (req, res) => {
+  const { data: order, error: findErr } = await db
+    .from('orders').select('*').eq('id', req.params.id).maybeSingle();
+  if (findErr) return dbError(res, findErr, 500);
+  if (!order) return res.status(404).json({ error: 'Заказ не найден' });
+
+  const { error } = await db.from('orders').delete().eq('id', order.id);
+  if (error) return dbError(res, error);
+
+  // the group post stays as the record of what was asked for, struck through
+  markOrderDeleted(order, { by: 'admin' }).catch((e) => console.error('[notices]', e));
+  res.json({ ok: true });
 });
 
 /* Resend a confirmed order — for one confirmed while the integration was off
