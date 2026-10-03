@@ -304,16 +304,20 @@ ${orderText(order, ctx)}`;
 }
 
 /* The order row is gone, so there is nothing left to open in the panel: the
-   post stays as a record of what was asked for, marked as withdrawn. */
-export async function markOrderDeleted(order) {
+   post stays as a record of what was asked for, marked as withdrawn. Who
+   withdrew it matters to whoever reads the group: a customer cancelling their
+   own order and an operator clearing one out of the books are two different
+   events, and the post is the only place either is written down. */
+export async function markOrderDeleted(order, { by = 'user' } = {}) {
   const group = adminGroupId();
   if (!group || !order?.notice_message_id) return;
 
   const ctx = await orderContext(order);
+  const who = by === 'admin' ? 'удалён администратором' : 'отменён пользователем';
   await editMessageText(group, order.notice_message_id,
     `${orderText(order, ctx)}
 
-🗑 <b>Заказ отменён пользователем</b>`);
+🗑 <b>Заказ ${who}</b>`);
 }
 
 export async function sendNewOrderNotice(order) {
