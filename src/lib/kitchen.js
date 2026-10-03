@@ -70,6 +70,8 @@ export async function summarise(ids) {
 
   return {
     order_count: prep.filter((o) => o.kind === 'order').length,
+    // what the kitchen actually has to make: units, not documents
+    item_count: [...itemQty.values()].reduce((a, q) => a + q, 0),
     replacement_count: prep.filter((o) => o.kind === 'replacement').length,
     items: items.sort((a, b) => a.name.localeCompare(b.name, 'ru')),
     materials: list,
@@ -93,7 +95,7 @@ export function kitchenText(summary, { cost = true } = {}) {
 
   return [
     '<b>Список на приготовление</b>',
-    `Заказов: ${summary.order_count}` +
+    `Позиций всего: ${summary.item_count}` +
       (summary.replacement_count ? `, замен: ${summary.replacement_count}` : ''),
     '',
     '<b>Позиции</b>',
