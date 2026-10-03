@@ -25,6 +25,12 @@ const filters = {
 
 /* 'return' is an old document from before replacements, kept as it was. */
 const KIND = { order: 'Заказ', replacement: 'Замена', return: 'Возврат' };
+// [именительный, винительный, причастие] — for the delete dialog's Russian
+const GENDER = {
+  order:       ['Заказ', 'заказ', 'удалён'],
+  replacement: ['Замена', 'замену', 'удалена'],
+  return:      ['Возврат', 'возврат', 'удалён']
+};
 const STATUS = {
   new: ['Новый', 'pill--warn'],
   confirmed: ['Подтверждён', 'pill--on'],
@@ -212,6 +218,9 @@ function draw() {
   wrap.querySelectorAll('[data-invoice]').forEach((b) => {
     b.onclick = () => printInvoice(b.dataset.invoice);
   });
+  wrap.querySelectorAll('[data-del]').forEach((b) => {
+    b.onclick = () => removeOrder(b.dataset.del);
+  });
   // Reuses the deep link the Telegram buttons use: the panel clears its
   // filters when it is asked to focus a row, so the source order is found
   // even when the current date range or status would have hidden it.
@@ -254,6 +263,8 @@ function rowHTML(o) {
           <button class="btn btn--sm" data-fp="${o.id}" title="Передать заказ в FrontPad">В FrontPad</button>` : ''}
         ${o.kind === 'replacement' ? '' /* not charged: no накладная, as nothing goes to FrontPad either */ : `
         <button class="btn btn--ghost btn--icon btn--sm" data-invoice="${o.id}" title="Скачать накладную"><span data-icon="print"></span></button>`}
+        <button class="btn btn--ghost btn--icon btn--sm btn--danger" data-del="${o.id}"
+                title="Удалить — заказ исчезнет из таблицы и из статистики"><span data-icon="trash"></span></button>
       </div></td>
     </tr>`;
 }
@@ -293,6 +304,26 @@ function decide(id, status) {
       await load(true);
     },
     verb
+  );
+}
+
+/* Delete the row itself. Unlike «Отклонить», which keeps the order and says
+   no to it, this takes it out of the table and out of the statistics — what a
+   test order or one entered by mistake needs. The customer is not told: there
+   is no order left to tell them about. */
+function removeOrder(id) {
+  const order = rows.find((r) => String(r.id) === String(id));
+  // «удалить замену», not «удалить замена»: the dialog says it out loud
+  const [subject, accusative, gone] = GENDER[order?.kind] || GENDER.order;
+  confirmDialog(
+    `Удалить ${accusative} #${id}`,
+    `${subject} будет ${gone} без возможности восстановления и перестанет ` +
+    'учитываться в статистике. Заказчик уведомления не получит.',
+    async () => {
+      await api.del(`/api/admin/orders/${id}`);
+      toast('Заказ удалён');
+      await load(true);
+    }
   );
 }
 
